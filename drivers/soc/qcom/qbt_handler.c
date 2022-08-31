@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define DEBUG
@@ -224,16 +223,14 @@ static void qbt_touch_report_event(struct input_handle *handle,
 	}
 
 	if (report_event) {
-		if ((!fd_touch->config.touch_fd_enable) &&
-				(!fd_touch->config.intr2_enable &&
-				!drvdata->fd_gpio.irq_enabled)) {
-			pr_debug("Received touch event but not scheduling\n");
+		if ((!fd_touch->config.touch_fd_enable &&
+				!fd_touch->config.intr2_enable) ||
+				!drvdata->fd_gpio.irq_enabled)
 			memcpy(fd_touch->last_events,
 					fd_touch->current_events,
 					MT_MAX_FINGERS * sizeof(
 					struct touch_event));
-		} else {
-			pr_debug("Received touch event scheduling\n");
+		else {
 			pm_stay_awake(drvdata->dev);
 			schedule_work(&drvdata->fd_touch.work);
 		}
@@ -817,7 +814,7 @@ static ssize_t qbt_read(struct file *filp, char __user *ubuf,
 		pr_err("Invalid minor number\n");
 	}
 	if (num_bytes != 0)
-		pr_warn("Could not copy %d bytes\n", num_bytes);
+		pr_warn("Could not copy %d bytes\n");
 	return num_bytes;
 }
 
@@ -1284,7 +1281,6 @@ static int qbt_read_device_tree(struct platform_device *pdev,
 	drvdata->is_wuhb_connected = 1;
 	drvdata->fd_gpio.gpio = gpio;
 	drvdata->fd_gpio.active_low = flags & OF_GPIO_ACTIVE_LOW;
-	pr_debug("is_wuhb_connected=%d\n", drvdata->is_wuhb_connected);
 
 end:
 	return rc;

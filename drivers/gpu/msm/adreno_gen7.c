@@ -33,15 +33,19 @@ static const u32 gen7_pwrup_reglist[] = {
 	GEN7_UCHE_MODE_CNTL,
 	GEN7_RB_NC_MODE_CNTL,
 	GEN7_RB_CMP_DBG_ECO_CNTL,
+	GEN7_TPL1_NC_MODE_CNTL,
+	GEN7_SP_NC_MODE_CNTL,
 	GEN7_GRAS_NC_MODE_CNTL,
 	GEN7_RB_CONTEXT_SWITCH_GMEM_SAVE_RESTORE,
 	GEN7_UCHE_GBIF_GX_CONFIG,
+	GEN7_RBBM_GBIF_CLIENT_QOS_CNTL,
 };
 
 /* IFPC only static powerup restore list */
 static const u32 gen7_ifpc_pwrup_reglist[] = {
-	GEN7_TPL1_NC_MODE_CNTL,
-	GEN7_SP_NC_MODE_CNTL,
+	GEN7_CP_CHICKEN_DBG,
+	GEN7_CP_BV_CHICKEN_DBG,
+	GEN7_CP_LPAC_CHICKEN_DBG,
 	GEN7_CP_DBG_ECO_CNTL,
 	GEN7_CP_PROTECT_CNTL,
 	GEN7_CP_PROTECT_REG,
@@ -409,7 +413,6 @@ int gen7_start(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	const struct adreno_gen7_core *gen7_core = to_gen7_core(adreno_dev);
 	static bool patch_reglist;
-	u32 bank_bit, mal;
 
 	/* Set up GBIF registers from the GPU core definition */
 	kgsl_regmap_multi_write(&device->regmap, gen7_core->gbif,
@@ -428,16 +431,6 @@ int gen7_start(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, GEN7_UCHE_TRAP_BASE_HI, 0x0001ffff);
 	kgsl_regwrite(device, GEN7_UCHE_WRITE_THRU_BASE_LO, 0xfffff000);
 	kgsl_regwrite(device, GEN7_UCHE_WRITE_THRU_BASE_HI, 0x0001ffff);
-
-	if (adreno_dev->gpucore->gmem_base) {
-		kgsl_regwrite(device, GEN7_UCHE_GMEM_RANGE_MIN_LO,
-				adreno_dev->gpucore->gmem_base);
-		kgsl_regwrite(device, GEN7_UCHE_GMEM_RANGE_MIN_HI, 0x0);
-		kgsl_regwrite(device, GEN7_UCHE_GMEM_RANGE_MAX_LO,
-				adreno_dev->gpucore->gmem_base +
-				adreno_dev->gpucore->gmem_size - 1);
-		kgsl_regwrite(device, GEN7_UCHE_GMEM_RANGE_MAX_HI, 0x0);
-	}
 
 	kgsl_regwrite(device, GEN7_UCHE_CACHE_WAYS, 0x800000);
 
@@ -458,30 +451,18 @@ int gen7_start(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, GEN7_GMU_CX_GMU_POWER_COUNTER_SELECT_1,
 			FIELD_PREP(GENMASK(7, 0), 0x4));
 
-	if (of_property_read_u32(device->pdev->dev.of_node,
-		"qcom,min-access-length", &mal))
-		mal = 32;
-
-	if (!WARN_ON(!adreno_dev->highest_bank_bit))
-		bank_bit = (adreno_dev->highest_bank_bit - 13) & 3;
-	else
-		bank_bit = 1;
-
 	kgsl_regwrite(device, GEN7_RB_NC_MODE_CNTL, BIT(11) | BIT(4) |
-			((mal == 64) ? BIT(3) : 0) |
-			FIELD_PREP(GENMASK(2, 1), bank_bit));
+			FIELD_PREP(GENMASK(2, 1), 3));
 	kgsl_regwrite(device, GEN7_TPL1_NC_MODE_CNTL,
-			((mal == 64) ? BIT(3) : 0) |
-			FIELD_PREP(GENMASK(2, 1), bank_bit));
+			FIELD_PREP(GENMASK(2, 1), 3));
 	kgsl_regwrite(device, GEN7_SP_NC_MODE_CNTL,
-			((mal == 64) ? BIT(3) : 0) |
 			FIELD_PREP(GENMASK(5, 4), 2) |
-			FIELD_PREP(GENMASK(2, 1), bank_bit));
+			FIELD_PREP(GENMASK(2, 1), 3));
 	kgsl_regwrite(device, GEN7_GRAS_NC_MODE_CNTL,
-			FIELD_PREP(GENMASK(8, 5), bank_bit));
+			FIELD_PREP(GENMASK(8, 5), 3));
 
 	kgsl_regwrite(device, GEN7_UCHE_MODE_CNTL,
-			FIELD_PREP(GENMASK(22, 21), bank_bit));
+			FIELD_PREP(GENMASK(22, 21), 3));
 	kgsl_regwrite(device, GEN7_RBBM_INTERFACE_HANG_INT_CNTL, BIT(30) |
 			FIELD_PREP(GENMASK(27, 0),
 				gen7_core->hang_detect_cycles));

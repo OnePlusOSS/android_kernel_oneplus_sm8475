@@ -75,12 +75,16 @@ if arg_contain -S "$@"; then
 	fi
 fi
 
-# To set GCC_PLUGINS
+# For scripts/gcc-plugin.sh
 if arg_contain -print-file-name=plugin "$@"; then
 	plugin_dir=$(mktemp -d)
 
-	mkdir -p $plugin_dir/include
-	touch $plugin_dir/include/plugin-version.h
+	sed -n 's/.*#include "\(.*\)"/\1/p' $(dirname $0)/../gcc-plugins/gcc-common.h |
+	while read header
+	do
+		mkdir -p $plugin_dir/include/$(dirname $header)
+		touch $plugin_dir/include/$header
+	done
 
 	echo $plugin_dir
 	exit 0

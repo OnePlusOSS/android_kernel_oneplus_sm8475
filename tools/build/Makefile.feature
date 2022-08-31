@@ -49,6 +49,7 @@ FEATURE_TESTS_BASIC :=                  \
         numa_num_possible_cpus          \
         libperl                         \
         libpython                       \
+        libpython-version               \
         libslang                        \
         libslang-include-subdir         \
         libcrypto                       \

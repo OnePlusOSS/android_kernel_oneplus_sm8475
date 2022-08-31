@@ -879,6 +879,7 @@ int nfcc_hw_check(struct nfc_dev *nfc_dev)
 	struct platform_gpio *nfc_gpio = &nfc_dev->configs.gpio;
 
 	/*get fw version in nci mode*/
+	usleep_range(NFC_GPIO_SET_WAIT_TIME_USEC,NFC_GPIO_SET_WAIT_TIME_USEC + 100);//add for Satisfy VEN spec of  15ms delay
 	gpio_set_ven(nfc_dev, 1);
 	gpio_set_ven(nfc_dev, 0);
 	gpio_set_ven(nfc_dev, 1);

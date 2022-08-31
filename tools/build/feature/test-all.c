@@ -14,6 +14,10 @@
 # include "test-libpython.c"
 #undef main
 
+#define main main_test_libpython_version
+# include "test-libpython-version.c"
+#undef main
+
 #define main main_test_libperl
 # include "test-libperl.c"
 #undef main
@@ -177,6 +181,7 @@
 int main(int argc, char *argv[])
 {
 	main_test_libpython();
+	main_test_libpython_version();
 	main_test_libperl();
 	main_test_hello();
 	main_test_libelf();

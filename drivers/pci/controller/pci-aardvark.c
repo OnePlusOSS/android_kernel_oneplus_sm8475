@@ -31,6 +31,7 @@
 #define PCIE_CORE_DEV_ID_REG					0x0
 #define PCIE_CORE_CMD_STATUS_REG				0x4
 #define PCIE_CORE_DEV_REV_REG					0x8
+#define PCIE_CORE_EXP_ROM_BAR_REG				0x30
 #define PCIE_CORE_PCIEXP_CAP					0xc0
 #define PCIE_CORE_ERR_CAPCTL_REG				0x118
 #define     PCIE_CORE_ERR_CAPCTL_ECRC_CHK_TX			BIT(5)
@@ -305,6 +306,11 @@ static inline u32 advk_readl(struct advk_pcie *pcie, u64 reg)
 	return readl(pcie->base + reg);
 }
 
+static inline u16 advk_read16(struct advk_pcie *pcie, u64 reg)
+{
+	return advk_readl(pcie, (reg & ~0x3)) >> ((reg & 0x3) * 8);
+}
+
 static u8 advk_pcie_ltssm_state(struct advk_pcie *pcie)
 {
 	u32 val;
@@ -378,8 +384,15 @@ static void advk_pcie_wait_for_retrain(struct advk_pcie *pcie)
 
 static void advk_pcie_issue_perst(struct advk_pcie *pcie)
 {
+	u32 reg;
+
 	if (!pcie->reset_gpio)
 		return;
+
+	/* PERST does not work for some cards when link training is enabled */
+	reg = advk_readl(pcie, PCIE_CORE_CTRL0_REG);
+	reg &= ~LINK_TRAINING_EN;
+	advk_writel(pcie, reg, PCIE_CORE_CTRL0_REG);
 
 	/* 10ms delay is needed for some cards */
 	dev_info(&pcie->pdev->dev, "issuing PERST via reset GPIO for 10ms\n");
@@ -388,45 +401,52 @@ static void advk_pcie_issue_perst(struct advk_pcie *pcie)
 	gpiod_set_value_cansleep(pcie->reset_gpio, 0);
 }
 
-static void advk_pcie_train_link(struct advk_pcie *pcie)
+static int advk_pcie_train_at_gen(struct advk_pcie *pcie, int gen)
 {
-	struct device *dev = &pcie->pdev->dev;
+	int ret, neg_gen;
 	u32 reg;
-	int ret;
 
-	/*
-	 * Setup PCIe rev / gen compliance based on device tree property
-	 * 'max-link-speed' which also forces maximal link speed.
-	 */
+	/* Setup link speed */
 	reg = advk_readl(pcie, PCIE_CORE_CTRL0_REG);
 	reg &= ~PCIE_GEN_SEL_MSK;
-	if (pcie->link_gen == 3)
+	if (gen == 3)
 		reg |= SPEED_GEN_3;
-	else if (pcie->link_gen == 2)
+	else if (gen == 2)
 		reg |= SPEED_GEN_2;
 	else
 		reg |= SPEED_GEN_1;
 	advk_writel(pcie, reg, PCIE_CORE_CTRL0_REG);
 
 	/*
-	 * Set maximal link speed value also into PCIe Link Control 2 register.
-	 * Armada 3700 Functional Specification says that default value is based
-	 * on SPEED_GEN but tests showed that default value is always 8.0 GT/s.
+	 * Enable link training. This is not needed in every call to this
+	 * function, just once suffices, but it does not break anything either.
 	 */
-	reg = advk_readl(pcie, PCIE_CORE_PCIEXP_CAP + PCI_EXP_LNKCTL2);
-	reg &= ~PCI_EXP_LNKCTL2_TLS;
-	if (pcie->link_gen == 3)
-		reg |= PCI_EXP_LNKCTL2_TLS_8_0GT;
-	else if (pcie->link_gen == 2)
-		reg |= PCI_EXP_LNKCTL2_TLS_5_0GT;
-	else
-		reg |= PCI_EXP_LNKCTL2_TLS_2_5GT;
-	advk_writel(pcie, reg, PCIE_CORE_PCIEXP_CAP + PCI_EXP_LNKCTL2);
-
-	/* Enable link training after selecting PCIe generation */
 	reg = advk_readl(pcie, PCIE_CORE_CTRL0_REG);
 	reg |= LINK_TRAINING_EN;
 	advk_writel(pcie, reg, PCIE_CORE_CTRL0_REG);
+
+	/*
+	 * Start link training immediately after enabling it.
+	 * This solves problems for some buggy cards.
+	 */
+	reg = advk_readl(pcie, PCIE_CORE_PCIEXP_CAP + PCI_EXP_LNKCTL);
+	reg |= PCI_EXP_LNKCTL_RL;
+	advk_writel(pcie, reg, PCIE_CORE_PCIEXP_CAP + PCI_EXP_LNKCTL);
+
+	ret = advk_pcie_wait_for_link(pcie);
+	if (ret)
+		return ret;
+
+	reg = advk_read16(pcie, PCIE_CORE_PCIEXP_CAP + PCI_EXP_LNKSTA);
+	neg_gen = reg & PCI_EXP_LNKSTA_CLS;
+
+	return neg_gen;
+}
+
+static void advk_pcie_train_link(struct advk_pcie *pcie)
+{
+	struct device *dev = &pcie->pdev->dev;
+	int neg_gen = -1, gen;
 
 	/*
 	 * Reset PCIe card via PERST# signal. Some cards are not detected
@@ -438,18 +458,41 @@ static void advk_pcie_train_link(struct advk_pcie *pcie)
 	 * PERST# signal could have been asserted by pinctrl subsystem before
 	 * probe() callback has been called or issued explicitly by reset gpio
 	 * function advk_pcie_issue_perst(), making the endpoint going into
-	 * fundamental reset. As required by PCI Express spec (PCI Express
-	 * Base Specification, REV. 4.0 PCI Express, February 19 2014, 6.6.1
-	 * Conventional Reset) a delay for at least 100ms after such a reset
-	 * before sending a Configuration Request to the device is needed.
-	 * So wait until PCIe link is up. Function advk_pcie_wait_for_link()
-	 * waits for link at least 900ms.
+	 * fundamental reset. As required by PCI Express spec a delay for at
+	 * least 100ms after such a reset before link training is needed.
 	 */
-	ret = advk_pcie_wait_for_link(pcie);
-	if (ret < 0)
-		dev_err(dev, "link never came up\n");
-	else
-		dev_info(dev, "link up\n");
+	msleep(PCI_PM_D3COLD_WAIT);
+
+	/*
+	 * Try link training at link gen specified by device tree property
+	 * 'max-link-speed'. If this fails, iteratively train at lower gen.
+	 */
+	for (gen = pcie->link_gen; gen > 0; --gen) {
+		neg_gen = advk_pcie_train_at_gen(pcie, gen);
+		if (neg_gen > 0)
+			break;
+	}
+
+	if (neg_gen < 0)
+		goto err;
+
+	/*
+	 * After successful training if negotiated gen is lower than requested,
+	 * train again on negotiated gen. This solves some stability issues for
+	 * some buggy gen1 cards.
+	 */
+	if (neg_gen < gen) {
+		gen = neg_gen;
+		neg_gen = advk_pcie_train_at_gen(pcie, gen);
+	}
+
+	if (neg_gen == gen) {
+		dev_info(dev, "link up at gen %i\n", gen);
+		return;
+	}
+
+err:
+	dev_err(dev, "link never came up\n");
 }
 
 /*
@@ -649,7 +692,6 @@ static int advk_pcie_check_pio_status(struct advk_pcie *pcie, bool allow_crs, u3
 	u32 reg;
 	unsigned int status;
 	char *strcomp_status, *str_posted;
-	int ret;
 
 	reg = advk_readl(pcie, PIO_STAT);
 	status = (reg & PIO_COMPLETION_STATUS_MASK) >>
@@ -674,7 +716,6 @@ static int advk_pcie_check_pio_status(struct advk_pcie *pcie, bool allow_crs, u3
 	case PIO_COMPLETION_STATUS_OK:
 		if (reg & PIO_ERR_STATUS) {
 			strcomp_status = "COMP_ERR";
-			ret = -EFAULT;
 			break;
 		}
 		/* Get the read result */
@@ -682,11 +723,9 @@ static int advk_pcie_check_pio_status(struct advk_pcie *pcie, bool allow_crs, u3
 			*val = advk_readl(pcie, PIO_RD_DATA);
 		/* No error */
 		strcomp_status = NULL;
-		ret = 0;
 		break;
 	case PIO_COMPLETION_STATUS_UR:
 		strcomp_status = "UR";
-		ret = -EOPNOTSUPP;
 		break;
 	case PIO_COMPLETION_STATUS_CRS:
 		if (allow_crs && val) {
@@ -704,7 +743,6 @@ static int advk_pcie_check_pio_status(struct advk_pcie *pcie, bool allow_crs, u3
 			 */
 			*val = CFG_RD_CRS_VAL;
 			strcomp_status = NULL;
-			ret = 0;
 			break;
 		}
 		/* PCIe r4.0, sec 2.3.2, says:
@@ -720,24 +758,21 @@ static int advk_pcie_check_pio_status(struct advk_pcie *pcie, bool allow_crs, u3
 		 * Request and taking appropriate action, e.g., complete the
 		 * Request to the host as a failed transaction.
 		 *
-		 * So return -EAGAIN and caller (pci-aardvark.c driver) will
-		 * re-issue request again up to the PIO_RETRY_CNT retries.
+		 * To simplify implementation do not re-issue the Configuration
+		 * Request and complete the Request as a failed transaction.
 		 */
 		strcomp_status = "CRS";
-		ret = -EAGAIN;
 		break;
 	case PIO_COMPLETION_STATUS_CA:
 		strcomp_status = "CA";
-		ret = -ECANCELED;
 		break;
 	default:
 		strcomp_status = "Unknown";
-		ret = -EINVAL;
 		break;
 	}
 
 	if (!strcomp_status)
-		return ret;
+		return 0;
 
 	if (reg & PIO_NON_POSTED_REQ)
 		str_posted = "Non-posted";
@@ -747,7 +782,7 @@ static int advk_pcie_check_pio_status(struct advk_pcie *pcie, bool allow_crs, u3
 	dev_dbg(dev, "%s PIO Response Status: %s, %#x @ %#x\n",
 		str_posted, strcomp_status, reg, advk_readl(pcie, PIO_ADDR_LS));
 
-	return ret;
+	return -EFAULT;
 }
 
 static int advk_pcie_wait_pio(struct advk_pcie *pcie)
@@ -755,13 +790,13 @@ static int advk_pcie_wait_pio(struct advk_pcie *pcie)
 	struct device *dev = &pcie->pdev->dev;
 	int i;
 
-	for (i = 1; i <= PIO_RETRY_CNT; i++) {
+	for (i = 0; i < PIO_RETRY_CNT; i++) {
 		u32 start, isr;
 
 		start = advk_readl(pcie, PIO_START);
 		isr = advk_readl(pcie, PIO_ISR);
 		if (!start && isr)
-			return i;
+			return 0;
 		udelay(PIO_RETRY_DELAY);
 	}
 
@@ -778,6 +813,10 @@ advk_pci_bridge_emul_base_conf_read(struct pci_bridge_emul *bridge,
 	switch (reg) {
 	case PCI_COMMAND:
 		*value = advk_readl(pcie, PCIE_CORE_CMD_STATUS_REG);
+		return PCI_BRIDGE_EMUL_HANDLED;
+
+	case PCI_ROM_ADDRESS1:
+		*value = advk_readl(pcie, PCIE_CORE_EXP_ROM_BAR_REG);
 		return PCI_BRIDGE_EMUL_HANDLED;
 
 	case PCI_INTERRUPT_LINE: {
@@ -810,6 +849,10 @@ advk_pci_bridge_emul_base_conf_write(struct pci_bridge_emul *bridge,
 	switch (reg) {
 	case PCI_COMMAND:
 		advk_writel(pcie, new, PCIE_CORE_CMD_STATUS_REG);
+		break;
+
+	case PCI_ROM_ADDRESS1:
+		advk_writel(pcie, new, PCIE_CORE_EXP_ROM_BAR_REG);
 		break;
 
 	case PCI_INTERRUPT_LINE:
@@ -879,6 +922,7 @@ advk_pci_bridge_emul_pcie_conf_read(struct pci_bridge_emul *bridge,
 		return PCI_BRIDGE_EMUL_HANDLED;
 	}
 
+	case PCI_CAP_LIST_ID:
 	case PCI_EXP_DEVCAP:
 	case PCI_EXP_DEVCTL:
 		*value = advk_readl(pcie, PCIE_CORE_PCIEXP_CAP + reg);
@@ -940,6 +984,7 @@ static struct pci_bridge_emul_ops advk_pci_bridge_emul_ops = {
 static int advk_sw_pci_bridge_init(struct advk_pcie *pcie)
 {
 	struct pci_bridge_emul *bridge = &pcie->bridge;
+	int ret;
 
 	bridge->conf.vendor =
 		cpu_to_le16(advk_readl(pcie, PCIE_CORE_DEV_ID_REG) & 0xffff);
@@ -959,17 +1004,19 @@ static int advk_sw_pci_bridge_init(struct advk_pcie *pcie)
 	/* Support interrupt A for MSI feature */
 	bridge->conf.intpin = PCIE_CORE_INT_A_ASSERT_ENABLE;
 
-	/* Aardvark HW provides PCIe Capability structure in version 2 */
-	bridge->pcie_conf.cap = cpu_to_le16(2);
-
-	/* Indicates supports for Completion Retry Status */
-	bridge->pcie_conf.rootcap = cpu_to_le16(PCI_EXP_RTCAP_CRSVIS);
-
 	bridge->has_pcie = true;
 	bridge->data = pcie;
 	bridge->ops = &advk_pci_bridge_emul_ops;
 
-	return pci_bridge_emul_init(bridge, 0);
+	/* PCIe config space can be initialized after pci_bridge_emul_init() */
+	ret = pci_bridge_emul_init(bridge, 0);
+	if (ret < 0)
+		return ret;
+
+	/* Indicates supports for Completion Retry Status */
+	bridge->pcie_conf.rootcap = cpu_to_le16(PCI_EXP_RTCAP_CRSVIS);
+
+	return 0;
 }
 
 static bool advk_pcie_valid_device(struct advk_pcie *pcie, struct pci_bus *bus,
@@ -1021,7 +1068,6 @@ static int advk_pcie_rd_conf(struct pci_bus *bus, u32 devfn,
 			     int where, int size, u32 *val)
 {
 	struct advk_pcie *pcie = bus->sysdata;
-	int retry_count;
 	bool allow_crs;
 	u32 reg;
 	int ret;
@@ -1044,8 +1090,18 @@ static int advk_pcie_rd_conf(struct pci_bus *bus, u32 devfn,
 		    (le16_to_cpu(pcie->bridge.pcie_conf.rootctl) &
 		     PCI_EXP_RTCTL_CRSSVE);
 
-	if (advk_pcie_pio_is_running(pcie))
-		goto try_crs;
+	if (advk_pcie_pio_is_running(pcie)) {
+		/*
+		 * If it is possible return Completion Retry Status so caller
+		 * tries to issue the request again instead of failing.
+		 */
+		if (allow_crs) {
+			*val = CFG_RD_CRS_VAL;
+			return PCIBIOS_SUCCESSFUL;
+		}
+		*val = 0xffffffff;
+		return PCIBIOS_SET_FAILED;
+	}
 
 	/* Program the control register */
 	reg = advk_readl(pcie, PIO_CTRL);
@@ -1064,24 +1120,30 @@ static int advk_pcie_rd_conf(struct pci_bus *bus, u32 devfn,
 	/* Program the data strobe */
 	advk_writel(pcie, 0xf, PIO_WR_DATA_STRB);
 
-	retry_count = 0;
-	do {
-		/* Clear PIO DONE ISR and start the transfer */
-		advk_writel(pcie, 1, PIO_ISR);
-		advk_writel(pcie, 1, PIO_START);
+	/* Clear PIO DONE ISR and start the transfer */
+	advk_writel(pcie, 1, PIO_ISR);
+	advk_writel(pcie, 1, PIO_START);
 
-		ret = advk_pcie_wait_pio(pcie);
-		if (ret < 0)
-			goto try_crs;
+	ret = advk_pcie_wait_pio(pcie);
+	if (ret < 0) {
+		/*
+		 * If it is possible return Completion Retry Status so caller
+		 * tries to issue the request again instead of failing.
+		 */
+		if (allow_crs) {
+			*val = CFG_RD_CRS_VAL;
+			return PCIBIOS_SUCCESSFUL;
+		}
+		*val = 0xffffffff;
+		return PCIBIOS_SET_FAILED;
+	}
 
-		retry_count += ret;
-
-		/* Check PIO status and get the read result */
-		ret = advk_pcie_check_pio_status(pcie, allow_crs, val);
-	} while (ret == -EAGAIN && retry_count < PIO_RETRY_CNT);
-
-	if (ret < 0)
-		goto fail;
+	/* Check PIO status and get the read result */
+	ret = advk_pcie_check_pio_status(pcie, allow_crs, val);
+	if (ret < 0) {
+		*val = 0xffffffff;
+		return PCIBIOS_SET_FAILED;
+	}
 
 	if (size == 1)
 		*val = (*val >> (8 * (where & 3))) & 0xff;
@@ -1089,20 +1151,6 @@ static int advk_pcie_rd_conf(struct pci_bus *bus, u32 devfn,
 		*val = (*val >> (8 * (where & 3))) & 0xffff;
 
 	return PCIBIOS_SUCCESSFUL;
-
-try_crs:
-	/*
-	 * If it is possible, return Completion Retry Status so that caller
-	 * tries to issue the request again instead of failing.
-	 */
-	if (allow_crs) {
-		*val = CFG_RD_CRS_VAL;
-		return PCIBIOS_SUCCESSFUL;
-	}
-
-fail:
-	*val = 0xffffffff;
-	return PCIBIOS_SET_FAILED;
 }
 
 static int advk_pcie_wr_conf(struct pci_bus *bus, u32 devfn,
@@ -1111,7 +1159,6 @@ static int advk_pcie_wr_conf(struct pci_bus *bus, u32 devfn,
 	struct advk_pcie *pcie = bus->sysdata;
 	u32 reg;
 	u32 data_strobe = 0x0;
-	int retry_count;
 	int offset;
 	int ret;
 
@@ -1153,22 +1200,19 @@ static int advk_pcie_wr_conf(struct pci_bus *bus, u32 devfn,
 	/* Program the data strobe */
 	advk_writel(pcie, data_strobe, PIO_WR_DATA_STRB);
 
-	retry_count = 0;
-	do {
-		/* Clear PIO DONE ISR and start the transfer */
-		advk_writel(pcie, 1, PIO_ISR);
-		advk_writel(pcie, 1, PIO_START);
+	/* Clear PIO DONE ISR and start the transfer */
+	advk_writel(pcie, 1, PIO_ISR);
+	advk_writel(pcie, 1, PIO_START);
 
-		ret = advk_pcie_wait_pio(pcie);
-		if (ret < 0)
-			return PCIBIOS_SET_FAILED;
+	ret = advk_pcie_wait_pio(pcie);
+	if (ret < 0)
+		return PCIBIOS_SET_FAILED;
 
-		retry_count += ret;
+	ret = advk_pcie_check_pio_status(pcie, false, NULL);
+	if (ret < 0)
+		return PCIBIOS_SET_FAILED;
 
-		ret = advk_pcie_check_pio_status(pcie, false, NULL);
-	} while (ret == -EAGAIN && retry_count < PIO_RETRY_CNT);
-
-	return ret < 0 ? PCIBIOS_SET_FAILED : PCIBIOS_SUCCESSFUL;
+	return PCIBIOS_SUCCESSFUL;
 }
 
 static struct pci_ops advk_pcie_ops = {

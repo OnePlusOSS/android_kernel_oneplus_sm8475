@@ -1,0 +1,9 @@
+config AW8680X_SENSOR
+	tristate "Awinic AW8680X Sensor driver"
+	depends on I2C
+	help
+		Say Y here if you have Awinic aw8680x sensor controller
+		chip in your system.
+		If unsure, say N.
+		To compile this driver as a module, choose M here: the
+		module will be called aw8680x.

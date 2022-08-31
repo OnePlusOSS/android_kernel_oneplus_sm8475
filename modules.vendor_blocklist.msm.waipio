@@ -63,5 +63,6 @@ blocklist torture
 blocklist locktorture
 blocklist rcutorture
 blocklist mmrm_test_module
+blocklist kunit_synaptics
 blocklist q5drv_linux
 blocklist limits_stat

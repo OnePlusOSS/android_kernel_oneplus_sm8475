@@ -610,17 +610,14 @@ static int report__browse_hists(struct report *rep)
 	int ret;
 	struct perf_session *session = rep->session;
 	struct evlist *evlist = session->evlist;
-	char *help = NULL, *path = NULL;
+	const char *help = perf_tip(system_path(TIPDIR));
 
-	path = system_path(TIPDIR);
-	if (perf_tip(&help, path) || help == NULL) {
+	if (help == NULL) {
 		/* fallback for people who don't install perf ;-) */
-		free(path);
-		path = system_path(DOCDIR);
-		if (perf_tip(&help, path) || help == NULL)
-			help = strdup("Cannot load tips.txt file, please install perf!");
+		help = perf_tip(DOCDIR);
+		if (help == NULL)
+			help = "Cannot load tips.txt file, please install perf!";
 	}
-	free(path);
 
 	switch (use_browser) {
 	case 1:
@@ -647,7 +644,7 @@ static int report__browse_hists(struct report *rep)
 		ret = perf_evlist__tty_browse_hists(evlist, rep, help);
 		break;
 	}
-	free(help);
+
 	return ret;
 }
 

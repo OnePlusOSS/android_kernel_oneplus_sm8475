@@ -3301,7 +3301,6 @@ static void free_unref_page_commit(struct page *page, unsigned long pfn)
 	struct zone *zone = page_zone(page);
 	struct per_cpu_pages *pcp;
 	int migratetype;
-	bool pcp_skip_cma_pages = false;
 
 	migratetype = get_pcppage_migratetype(page);
 	__count_vm_event(PGFREE);
@@ -3314,10 +3313,7 @@ static void free_unref_page_commit(struct page *page, unsigned long pfn)
 	 * excessively into the page allocator
 	 */
 	if (migratetype >= MIGRATE_PCPTYPES) {
-		trace_android_vh_pcplist_add_cma_pages_bypass(migratetype,
-			&pcp_skip_cma_pages);
-		if (unlikely(is_migrate_isolate(migratetype)) ||
-				pcp_skip_cma_pages) {
+		if (unlikely(is_migrate_isolate(migratetype))) {
 			free_one_page(zone, page, pfn, 0, migratetype,
 				      FPI_NONE);
 			return;
@@ -4122,9 +4118,7 @@ void warn_alloc(gfp_t gfp_mask, nodemask_t *nodemask, const char *fmt, ...)
 	va_list args;
 	static DEFINE_RATELIMIT_STATE(nopage_rs, 10*HZ, 1);
 
-	if ((gfp_mask & __GFP_NOWARN) ||
-	     !__ratelimit(&nopage_rs) ||
-	     ((gfp_mask & __GFP_DMA) && !has_managed_dma()))
+	if ((gfp_mask & __GFP_NOWARN) || !__ratelimit(&nopage_rs))
 		return;
 
 	va_start(args, fmt);
@@ -8724,7 +8718,6 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	unsigned long outer_start, outer_end;
 	unsigned int order;
 	int ret = 0;
-	bool skip_drain_all_pages = false;
 
 	struct compact_control cc = {
 		.nr_migratepages = 0,
@@ -8770,10 +8763,7 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 		return ret;
 	}
 
-	trace_android_vh_cma_drain_all_pages_bypass(migratetype,
-						&skip_drain_all_pages);
-	if (!skip_drain_all_pages)
-		drain_all_pages(cc.zone);
+	drain_all_pages(cc.zone);
 
 	/*
 	 * In case of -EBUSY, we'd like to know which page causes problem.
@@ -9143,18 +9133,3 @@ bool take_page_off_buddy(struct page *page)
 	return ret;
 }
 #endif
-
-#ifdef CONFIG_ZONE_DMA
-bool has_managed_dma(void)
-{
-	struct pglist_data *pgdat;
-
-	for_each_online_pgdat(pgdat) {
-		struct zone *zone = &pgdat->node_zones[ZONE_DMA];
-
-		if (managed_zone(zone))
-			return true;
-	}
-	return false;
-}
-#endif /* CONFIG_ZONE_DMA */

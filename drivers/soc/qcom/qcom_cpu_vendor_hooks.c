@@ -16,6 +16,11 @@
 #include <linux/spinlock.h>
 #include <linux/atomic.h>
 #include <linux/sched/debug.h>
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+#include <../kernel/oplus_perf_sched/sched_assist/sa_rwsem.h>
+#endif
+
 #include <linux/io.h>
 
 #include <soc/qcom/watchdog.h>

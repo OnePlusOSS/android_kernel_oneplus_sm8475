@@ -52,7 +52,7 @@
 		secure-monitor = <&sm>;
 	};
 
-	gpu_opp_table: opp-table-gpu {
+	gpu_opp_table: gpu-opp-table {
 		compatible = "operating-points-v2";
 
 		opp-124999998 {

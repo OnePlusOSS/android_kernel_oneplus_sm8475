@@ -1182,7 +1182,7 @@ rwsem_down_write_slowpath(struct rw_semaphore *sem, int state)
 
 		/*
 		 * If there were already threads queued before us and:
-		 *  1) there are no active locks, wake the front
+		 *  1) there are no no active locks, wake the front
 		 *     queued process(es) as the handoff bit might be set.
 		 *  2) there are no active writers and some readers, the lock
 		 *     must be read owned; so we try to wake any read lock
@@ -1287,7 +1287,7 @@ out_nolock:
 	list_del(&waiter.list);
 
 	if (unlikely(wstate == WRITER_HANDOFF))
-		atomic_long_andnot(RWSEM_FLAG_HANDOFF,  &sem->count);
+		atomic_long_andnot(RWSEM_FLAG_HANDOFF, &sem->count);
 
 	if (list_empty(&sem->wait_list))
 		atomic_long_andnot(RWSEM_FLAG_WAITERS, &sem->count);

@@ -18,6 +18,10 @@
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
 #include <linux/regmap.h>
+#if IS_MODULE(CONFIG_OPLUS_FEATURE_THEIA)
+#include <soc/oplus/system/oplus_bscheck.h>
+#include <soc/oplus/system/oplus_brightscreen_check.h>
+#endif
 
 #define PON_REV2			0x01
 
@@ -177,6 +181,15 @@ static irqreturn_t pm8941_pwrkey_irq(int irq, void *_data)
 	}
 	pwrkey->last_status = sts;
 
+	if (pwrkey->code == KEY_POWER)
+		pr_err("keycode = %d, key_st = %d\n", pwrkey->code, sts);
+#if IS_MODULE(CONFIG_OPLUS_FEATURE_THEIA)
+        if(pwrkey->code == KEY_POWER && sts != 0){
+            pr_err("theia keycode = %d, key_st = %d\n", pwrkey->code, sts);
+            black_screen_timer_restart();
+            bright_screen_timer_restart();
+	}
+#endif
 	input_report_key(pwrkey->input, pwrkey->code, sts);
 	input_sync(pwrkey->input);
 

@@ -465,6 +465,8 @@ static void update_temperature(struct thermal_zone_device *tz)
 	mutex_lock(&tz->lock);
 	tz->last_temperature = tz->temperature;
 	tz->temperature = temp;
+	dev_err(&tz->temperature, "update_temperature=%d\n",
+			tz->temperature);
 	mutex_unlock(&tz->lock);
 
 	trace_thermal_temperature(tz);

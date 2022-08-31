@@ -136,7 +136,7 @@
 /*command response timeout*/
 #define NCI_CMD_RSP_TIMEOUT             (2000)	//2s
 /*Time to wait for NFCC to be ready again after any change in the GPIO*/
-#define NFC_GPIO_SET_WAIT_TIME_USEC     (10000)
+#define NFC_GPIO_SET_WAIT_TIME_USEC     (20000)
 /*Time to wait after soft reset via any NCI/DL cmd*/
 #define NFC_SOFT_RESET_WAIT_TIME_USEC   (5000)
 /*Time to wait before retrying i2c writes*/

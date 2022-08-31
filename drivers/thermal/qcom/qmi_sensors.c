@@ -73,7 +73,7 @@ static int32_t encode_qmi(int32_t val)
 	temp_val &= ~(1 << shift);
 
 	local_val |= temp_val << (QMI_MANTISSA_MSB - shift);
-	pr_debug("inp:%d shift:%d out:%x temp_val:%x\n",
+	pr_err("inp:%d shift:%d out:%x temp_val:%x\n",
 			val, shift, local_val, temp_val);
 
 	return local_val;
@@ -87,7 +87,7 @@ static int32_t decode_qmi(int32_t val)
 	shift = (val & QMI_FL_EXP) >> QMI_MANTISSA_MSB;
 	shift = QMI_MANTISSA_MSB - (shift - 127);
 	local_val = (val & QMI_FL_MANTISSA) | QMI_FL_NORM;
-	pr_debug("val:0x%x sign:%d shift:%d mantissa:%x temp:%d\n",
+	pr_err("val:0x%x sign:%d shift:%d mantissa:%x temp:%d\n",
 			val, sign, shift, local_val,
 			sign * (local_val >> shift));
 
@@ -142,7 +142,7 @@ static void qmi_ts_update_temperature(struct qmi_ts_instance *ts,
 
 		qmi_sens->last_reading =
 			decode_qmi(ind_msg->temp) * 1000;
-		pr_debug("sensor:%s temperature:%d\n",
+		pr_err("sensor:%s temperature:%d\n",
 				qmi_sens->qmi_name, qmi_sens->last_reading);
 		if (!qmi_sens->tz_dev)
 			return;
@@ -151,7 +151,7 @@ static void qmi_ts_update_temperature(struct qmi_ts_instance *ts,
 			qmi_sens->last_reading >= qmi_sens->high_thresh) ||
 			(qmi_sens->low_thresh != INT_MIN &&
 			 qmi_sens->last_reading <= qmi_sens->low_thresh))) {
-			pr_debug("Sensor:%s Notify. temp:%d\n",
+			pr_err("Sensor:%s Notify. temp:%d\n",
 					ind_msg->sensor_id.sensor_id,
 					qmi_sens->last_reading);
 			queue_work(system_highpri_wq,
@@ -213,7 +213,7 @@ static int qmi_ts_request(struct qmi_sensor *qmi_sens,
 		req.temp_threshold_low =
 			encode_qmi(qmi_sens->low_thresh);
 
-		pr_debug("Sensor:%s set high_trip:%d, low_trip:%d, high_valid:%d, low_valid:%d\n",
+		pr_err("Sensor:%s set high_trip:%d, low_trip:%d, high_valid:%d, low_valid:%d\n",
 			qmi_sens->qmi_name,
 			qmi_sens->high_thresh,
 			qmi_sens->low_thresh,
@@ -327,7 +327,7 @@ static int qmi_register_sensor_device(struct qmi_sensor *qmi_sens)
 		qmi_sens->tz_dev = NULL;
 		return ret;
 	}
-	pr_debug("Sensor register success for %s\n", qmi_sens->qmi_name);
+	pr_err("Sensor register success for %s\n", qmi_sens->qmi_name);
 
 	return 0;
 }
@@ -426,7 +426,7 @@ static void thermal_qmi_net_reset(struct qmi_handle *qmi)
 	struct qmi_sensor *qmi_sens = NULL;
 	int ret;
 
-	pr_debug("reset QMI server\n");
+	pr_err("reset QMI server\n");
 	list_for_each_entry(qmi_sens, &ts->ts_sensor_list,
 					ts_node) {
 		if (!qmi_sens->connection_active)

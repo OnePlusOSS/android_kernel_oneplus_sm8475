@@ -220,8 +220,7 @@ static struct sock *ping_lookup(struct net *net, struct sk_buff *skb, u16 ident)
 			continue;
 		}
 
-		if (sk->sk_bound_dev_if && sk->sk_bound_dev_if != dif &&
-		    sk->sk_bound_dev_if != inet_sdif(skb))
+		if (sk->sk_bound_dev_if && sk->sk_bound_dev_if != dif)
 			continue;
 
 		sock_hold(sk);

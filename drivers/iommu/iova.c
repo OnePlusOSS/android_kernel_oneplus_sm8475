@@ -65,7 +65,8 @@ static void free_iova_flush_queue(struct iova_domain *iovad)
 	if (!has_iova_flush_queue(iovad))
 		return;
 
-	del_timer_sync(&iovad->fq_timer);
+	if (timer_pending(&iovad->fq_timer))
+		del_timer(&iovad->fq_timer);
 
 	fq_destroy_all_entries(iovad);
 

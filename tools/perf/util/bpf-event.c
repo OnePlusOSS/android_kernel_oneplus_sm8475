@@ -109,11 +109,7 @@ static int perf_env__fetch_btf(struct perf_env *env,
 	node->data_size = data_size;
 	memcpy(node->data, data, data_size);
 
-	if (!perf_env__insert_btf(env, node)) {
-		/* Insertion failed because of a duplicate. */
-		free(node);
-		return -1;
-	}
+	perf_env__insert_btf(env, node);
 	return 0;
 }
 

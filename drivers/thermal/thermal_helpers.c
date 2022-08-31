@@ -160,7 +160,7 @@ void thermal_zone_set_trips(struct thermal_zone_device *tz)
 	tz->prev_low_trip = low;
 	tz->prev_high_trip = high;
 
-	dev_dbg(&tz->device,
+	dev_err(&tz->device,
 		"new temperature boundaries: %d < x < %d\n", low, high);
 
 	/*
@@ -199,7 +199,7 @@ void thermal_cdev_update(struct thermal_cooling_device *cdev)
 
 	/* Make sure cdev enters the deepest cooling state */
 	list_for_each_entry(instance, &cdev->thermal_instances, cdev_node) {
-		dev_dbg(&cdev->device, "zone%d->target=%lu\n",
+		dev_err(&cdev->device, "zone%d->target=%lu\n",
 			instance->tz->id, instance->target);
 		if (instance->target == THERMAL_NO_TARGET)
 			continue;
@@ -212,7 +212,7 @@ void thermal_cdev_update(struct thermal_cooling_device *cdev)
 	cdev->updated = true;
 	mutex_unlock(&cdev->lock);
 	trace_cdev_update(cdev, target);
-	dev_dbg(&cdev->device, "set to state %lu\n", target);
+	dev_err(&cdev->device, "set to state %lu\n", target);
 }
 EXPORT_SYMBOL(thermal_cdev_update);
 

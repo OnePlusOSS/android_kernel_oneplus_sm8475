@@ -89,6 +89,10 @@ struct eusb2_repeater {
 	struct gpio_desc		*reset_gpiod;
 	u32				*param_override_seq;
 	u8				param_override_seq_cnt;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	u32			        *param_override_seq_host;
+	u8			        param_override_seq_cnt_host;
+#endif
 };
 
 static const struct regmap_config eusb2_i2c_regmap = {
@@ -114,9 +118,17 @@ static int eusb2_i2c_read_reg(struct eusb2_repeater *er, u8 reg, u8 *val)
 	return 0;
 }
 
-static int eusb2_i2c_write_reg(struct eusb2_repeater *er, u8 reg, u8 val)
+static int eusb2_i2c_write_reg(struct eusb2_repeater *er, u8 reg, u8 mask, u8 val)
 {
 	int ret;
+	u8 reg_val;
+
+	ret = eusb2_i2c_read_reg(er, reg, &reg_val);
+	if (ret)
+		return ret;
+#ifndef OPLUS_FEATURE_CHG_BASIC
+	val |= (reg_val & mask);
+#endif
 
 	ret = regmap_write(er->regmap, reg, val);
 	if (ret < 0) {
@@ -132,11 +144,12 @@ static int eusb2_i2c_write_reg(struct eusb2_repeater *er, u8 reg, u8 val)
 static void eusb2_repeater_update_seq(struct eusb2_repeater *er, u32 *seq, u8 cnt)
 {
 	int i;
+	u8 mask = 0xFF;
 
 	dev_dbg(er->ur.dev, "param override seq count:%d\n", cnt);
 	for (i = 0; i < cnt; i = i+2) {
 		dev_dbg(er->ur.dev, "write 0x%02x to 0x%02x\n", seq[i], seq[i+1]);
-		eusb2_i2c_write_reg(er, seq[i+1], seq[i]);
+		eusb2_i2c_write_reg(er, seq[i+1], mask, seq[i]);
 	}
 }
 
@@ -274,6 +287,29 @@ static int eusb2_repeater_init(struct usb_repeater *ur)
 	return 0;
 }
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+static int eusb2_repeater_init_with_mode(struct usb_repeater *ur, int param)
+{
+	struct eusb2_repeater *er =
+			container_of(ur, struct eusb2_repeater, ur);
+
+	/* override init sequence using devicetree based values */
+	if (er->param_override_seq_cnt && param == OPLUS_REPEATER_PARAM_DEVICE) {
+		eusb2_repeater_update_seq(er, er->param_override_seq,
+					er->param_override_seq_cnt);
+	}
+
+	if (er->param_override_seq_cnt_host && param == OPLUS_REPEATER_PARAM_HOST) {
+		eusb2_repeater_update_seq(er, er->param_override_seq_host,
+					er->param_override_seq_cnt_host);
+	}
+
+	dev_info(er->ur.dev, "eUSB2 repeater init with param :%d\n", param);
+
+	return 0;
+}
+#endif
+
 static int eusb2_repeater_reset(struct usb_repeater *ur, bool bring_out_of_reset)
 {
 	struct eusb2_repeater *er =
@@ -405,10 +441,43 @@ static int eusb2_repeater_i2c_probe(struct i2c_client *client)
 		}
 	}
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	num_elem = of_property_count_elems_of_size(dev->of_node, "qcom,param-override-seq-host",
+		                sizeof(*er->param_override_seq));
+	if (num_elem > 0) {
+		if (num_elem % 2) {
+			dev_err(dev, "invalid param_override_seq_host_len\n");
+			ret = -EINVAL;
+			goto err_probe;
+		}
+
+		er->param_override_seq_cnt_host = num_elem;
+		er->param_override_seq_host = devm_kcalloc(dev,
+				er->param_override_seq_cnt_host,
+				sizeof(*er->param_override_seq_host), GFP_KERNEL);
+		if (!er->param_override_seq_host) {
+			ret = -ENOMEM;
+			goto err_probe;
+		}
+
+		ret = of_property_read_u32_array(dev->of_node,
+				"qcom,param-override-seq-host",
+				er->param_override_seq_host,
+				er->param_override_seq_cnt_host);
+		if (ret) {
+			dev_err(dev, "qcom,param-override-seq-host read failed %d\n", ret);
+			goto err_probe;
+	    }
+  }
+#endif
+
 
 	er->ur.dev = dev;
 
 	er->ur.init		= eusb2_repeater_init;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	er->ur.init_with_mode   = eusb2_repeater_init_with_mode;
+#endif
 	er->ur.reset		= eusb2_repeater_reset;
 	er->ur.powerup		= eusb2_repeater_powerup;
 	er->ur.powerdown	= eusb2_repeater_powerdown;

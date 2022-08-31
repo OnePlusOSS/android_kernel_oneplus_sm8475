@@ -137,7 +137,8 @@ kill_whiteout:
 	goto out;
 }
 
-int ovl_mkdir_real(struct inode *dir, struct dentry **newdentry, umode_t mode)
+static int ovl_mkdir_real(struct inode *dir, struct dentry **newdentry,
+			  umode_t mode)
 {
 	int err;
 	struct dentry *d, *dentry = *newdentry;

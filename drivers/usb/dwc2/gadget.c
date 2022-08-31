@@ -1198,8 +1198,6 @@ static void dwc2_hsotg_start_req(struct dwc2_hsotg *hsotg,
 			}
 			ctrl |= DXEPCTL_CNAK;
 		} else {
-			hs_req->req.frame_number = hs_ep->target_frame;
-			hs_req->req.actual = 0;
 			dwc2_hsotg_complete_request(hsotg, hs_ep, hs_req, -ENODATA);
 			return;
 		}
@@ -2858,12 +2856,9 @@ static void dwc2_gadget_handle_ep_disabled(struct dwc2_hsotg_ep *hs_ep)
 
 	do {
 		hs_req = get_ep_head(hs_ep);
-		if (hs_req) {
-			hs_req->req.frame_number = hs_ep->target_frame;
-			hs_req->req.actual = 0;
+		if (hs_req)
 			dwc2_hsotg_complete_request(hsotg, hs_ep, hs_req,
 						    -ENODATA);
-		}
 		dwc2_gadget_incr_frame_num(hs_ep);
 		/* Update current frame number value. */
 		hsotg->frame_number = dwc2_hsotg_read_frameno(hsotg);
@@ -2916,11 +2911,8 @@ static void dwc2_gadget_handle_out_token_ep_disabled(struct dwc2_hsotg_ep *ep)
 
 	while (dwc2_gadget_target_frame_elapsed(ep)) {
 		hs_req = get_ep_head(ep);
-		if (hs_req) {
-			hs_req->req.frame_number = ep->target_frame;
-			hs_req->req.actual = 0;
+		if (hs_req)
 			dwc2_hsotg_complete_request(hsotg, ep, hs_req, -ENODATA);
-		}
 
 		dwc2_gadget_incr_frame_num(ep);
 		/* Update current frame number value. */
@@ -3009,11 +3001,8 @@ static void dwc2_gadget_handle_nak(struct dwc2_hsotg_ep *hs_ep)
 
 	while (dwc2_gadget_target_frame_elapsed(hs_ep)) {
 		hs_req = get_ep_head(hs_ep);
-		if (hs_req) {
-			hs_req->req.frame_number = hs_ep->target_frame;
-			hs_req->req.actual = 0;
+		if (hs_req)
 			dwc2_hsotg_complete_request(hsotg, hs_ep, hs_req, -ENODATA);
-		}
 
 		dwc2_gadget_incr_frame_num(hs_ep);
 		/* Update current frame number value. */
@@ -5032,7 +5021,7 @@ int dwc2_hsotg_suspend(struct dwc2_hsotg *hsotg)
 		hsotg->gadget.speed = USB_SPEED_UNKNOWN;
 		spin_unlock_irqrestore(&hsotg->lock, flags);
 
-		for (ep = 1; ep < hsotg->num_of_eps; ep++) {
+		for (ep = 0; ep < hsotg->num_of_eps; ep++) {
 			if (hsotg->eps_in[ep])
 				dwc2_hsotg_ep_disable_lock(&hsotg->eps_in[ep]->ep);
 			if (hsotg->eps_out[ep])

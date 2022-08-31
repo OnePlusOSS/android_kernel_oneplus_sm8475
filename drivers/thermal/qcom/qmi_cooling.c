@@ -16,6 +16,9 @@
 
 #include "thermal_mitigation_device_service_v01.h"
 
+#include <linux/proc_fs.h>
+#include <linux/uaccess.h>
+
 #define QMI_CDEV_DRIVER		"qmi-cooling-device"
 #define QMI_TMD_RESP_TOUT	msecs_to_jiffies(100)
 #define QMI_CLIENT_NAME_LENGTH	40
@@ -173,11 +176,93 @@ static int qmi_tmd_send_state_request(struct qmi_cooling_device *qmi_cdev,
 		goto qmi_send_exit;
 	}
 	ret = 0;
-	pr_debug("Requested qmi state:%d for %s\n", state, qmi_cdev->cdev_name);
+	pr_err("Requested qmi state:%d for %s\n", state, qmi_cdev->cdev_name);
 
 qmi_send_exit:
 	mutex_unlock(&tmd->mutex);
 	return ret;
+}
+
+#define BUF_LEN		256
+#define NAME_LEN	128
+#define HORAE_QMI_NUM	51
+
+typedef struct horae_qmi_info {
+	char name[NAME_LEN];
+	unsigned int id;
+	bool ctrl_flag;
+	struct thermal_cooling_device *cdev;
+} horae_qmi_info_t;
+
+static bool user_mode = false;
+
+static horae_qmi_info_t horae_qmi_cdev[HORAE_QMI_NUM] = {
+	{"pa", 0, false, NULL},
+	{"pa_fr1", 0, false, NULL},
+	{"cx_vdd_limit", 0, false, NULL},
+	{"modem", 0, false, NULL},
+	{"modem_current", 0, false, NULL},
+	{"modem_skin", 0, false, NULL},
+	{"modem_bw", 0, false, NULL},
+	{"modem_bw_backoff", 0, false, NULL},
+	{"vbatt_low", 0, false, NULL},
+	{"charge_state", 0, false, NULL},
+	{"mmw0", 0, false, NULL},
+	{"mmw1", 0, false, NULL},
+	{"mmw2", 0, false, NULL},
+	{"mmw3", 0, false, NULL},
+	{"mmw_skin0", 0, false, NULL},
+	{"mmw_skin1", 0, false, NULL},
+	{"mmw_skin2", 0, false, NULL},
+	{"mmw_skin3", 0, false, NULL},
+	{"wlan", 0, false, NULL},
+	{"wlan_bw", 0, false, NULL},
+	{"mmw_skin0_dsc", 0, false, NULL},
+	{"mmw_skin1_dsc", 0, false, NULL},
+	{"mmw_skin2_dsc", 0, false, NULL},
+	{"mmw_skin3_dsc", 0, false, NULL},
+	{"modem_skin_lte_dsc", 0, false, NULL},
+	{"modem_skin_nr_dsc", 0, false, NULL},
+	{"pa_dsc", 0, false, NULL},
+	{"pa_fr1_dsc", 0, false, NULL},
+	{"cdsp_sw", 0, false, NULL},
+	{"cdsp_hw", 0, false, NULL},
+	{"cpuv_restriction_cold", 0, false, NULL},
+	{"cpr_cold", 0, false, NULL},
+	{"modem_lte_dsc", 0, false, NULL},
+	{"modem_nr_dsc", 0, false, NULL},
+	{"modem_nr_scg_dsc", 0, false, NULL},
+	{"sdr0_lte_dsc", 0, false, NULL},
+	{"sdr1_lte_dsc", 0, false, NULL},
+	{"sdr0_nr_dsc", 0, false, NULL},
+	{"sdr1_nr_dsc", 0, false, NULL},
+	{"pa_sdr0_dsc", 0, false, NULL},
+	{"pa_sdr1_dsc", 0, false, NULL},
+	{"pa_fr1_sdr0_dsc", 0, false, NULL},
+	{"pa_fr1_sdr1_dsc", 0, false, NULL},
+	{"pa_fr1_sdr0_scg_dsc", 0, false, NULL},
+	{"pa_fr1_sdr1_scg_dsc", 0, false, NULL},
+	{"mmw0_dsc", 0, false, NULL},
+	{"mmw1_dsc", 0, false, NULL},
+	{"mmw2_dsc", 0, false, NULL},
+	{"mmw3_dsc", 0, false, NULL},
+	{"mmw_ul_throttling_dsc", 0, false, NULL},
+	{"mmw_ific_dsc", 0, false, NULL},
+};
+
+static int horae_ctrl_check(char *name) {
+	int i;
+	for (i = 0; i < HORAE_QMI_NUM; i++) {
+		if (!strcmp(name, horae_qmi_cdev[i].name)) {
+			if (horae_qmi_cdev[i].ctrl_flag) {
+				pr_err("horae is taking ctrl of %s\n",
+					name);
+				return -1;
+			}
+		}
+	}
+
+	return 0;
 }
 
 static int qmi_set_cur_state(struct thermal_cooling_device *cdev,
@@ -189,6 +274,12 @@ static int qmi_set_cur_state(struct thermal_cooling_device *cdev,
 	if (!qmi_cdev)
 		return -EINVAL;
 
+	if (!user_mode) {
+		ret = horae_ctrl_check(qmi_cdev->cdev_name);
+		if (ret)
+			return 0;
+	}
+
 	if (state > qmi_cdev->max_level)
 		return -EINVAL;
 
@@ -198,7 +289,7 @@ static int qmi_set_cur_state(struct thermal_cooling_device *cdev,
 	/* save it and return if server exit */
 	if (!qmi_cdev->connection_active) {
 		qmi_cdev->mtgn_state = state;
-		pr_debug("Pending request:%ld for %s\n", state,
+		pr_err("Pending request:%ld for %s\n", state,
 				qmi_cdev->cdev_name);
 		return 0;
 	}
@@ -217,8 +308,88 @@ static struct thermal_cooling_device_ops qmi_device_ops = {
 	.set_cur_state = qmi_set_cur_state,
 };
 
+static int horae_qmi_set_state(char *name, unsigned long state)
+{
+	int ret, i;
+
+	for (i = 0; i < HORAE_QMI_NUM; i++) {
+		if (!strcmp(horae_qmi_cdev[i].name, name))
+			break;
+	}
+
+	if (i == HORAE_QMI_NUM) {
+		pr_err("invalid name %s\n", name);
+		return -EINVAL;
+	}
+
+	if (IS_ERR_OR_NULL(horae_qmi_cdev[i].cdev)) {
+		pr_err("horae_qmi_cdev is invalid!\n");
+		return -EINVAL;
+	}
+
+	pr_err("name=%s, state=%lu\n", horae_qmi_cdev[i].name, state);
+
+	mutex_lock(&horae_qmi_cdev[i].cdev->lock);
+
+	if (!state)
+		horae_qmi_cdev[i].ctrl_flag = false;
+
+	user_mode = true;
+
+	ret = qmi_set_cur_state(horae_qmi_cdev[i].cdev, state);
+	if (ret >= 0)
+		horae_qmi_cdev[i].ctrl_flag = state ? true : false;
+
+	user_mode = false;
+
+	mutex_unlock(&horae_qmi_cdev[i].cdev->lock);
+
+	return ret;
+}
+
+static ssize_t horae_qmi_write(struct file *filp, const char __user *buf,
+				size_t count, loff_t *pos)
+{
+	int ret, len;
+	unsigned long state = 0;
+	char tmp[BUF_LEN + 1];
+	char name[NAME_LEN];
+
+	if (count == 0)
+		return 0;
+
+	len = count > BUF_LEN ? BUF_LEN : count;
+
+	ret = copy_from_user(tmp, buf, len);
+	if (ret) {
+		pr_err("copy_from_user failed, ret=%d\n", ret);
+		return count;
+	}
+
+	if (tmp[len - 1] == '\n')
+		tmp[len - 1] = '\0';
+	else
+		tmp[len] = '\0';
+
+	ret = sscanf(tmp, "%s %lu", &name, &state);
+	if (ret < 2) {
+		pr_err("horae_qmi write failed, ret=%d\n", ret);
+		return count;
+	}
+
+	horae_qmi_set_state(name, state);
+
+	return count;
+}
+
+static const struct proc_ops proc_horae_qmi_fops = {
+	.proc_write = horae_qmi_write,
+};
+
 static int qmi_register_cooling_device(struct qmi_cooling_device *qmi_cdev)
 {
+	int i;
+
 	qmi_cdev->cdev = thermal_of_cooling_device_register(
 					qmi_cdev->np,
 					qmi_cdev->cdev_name,
@@ -229,8 +400,15 @@ static int qmi_register_cooling_device(struct qmi_cooling_device *qmi_cdev)
 			qmi_cdev->cdev_name, PTR_ERR(qmi_cdev->cdev));
 		return PTR_ERR(qmi_cdev->cdev);
 	}
-	pr_debug("Cooling register success for %s\n", qmi_cdev->cdev_name);
+	pr_err("Cooling register success for %s\n", qmi_cdev->cdev_name);
 
+	for (i = 0; i < HORAE_QMI_NUM; i++) {
+		if (!strcmp(qmi_cdev->cdev_name, horae_qmi_cdev[i].name)
+			&& (qmi_cdev->tmd->inst_id == horae_qmi_cdev[i].id)) {
+			horae_qmi_cdev[i].cdev = qmi_cdev->cdev;
+			pr_err("horae qmi_cdev %s register successful!\n", horae_qmi_cdev[i].name);
+		}
+	}
 	return 0;
 }
 
@@ -497,6 +675,7 @@ static int qmi_device_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	int ret = 0, idx = 0;
+	struct proc_dir_entry *horae_qmi_entry;
 
 	ret = of_get_qmi_tmd_platform_data(dev);
 	if (ret)
@@ -531,6 +710,10 @@ static int qmi_device_probe(struct platform_device *pdev)
 			goto probe_err;
 		}
 	}
+
+	horae_qmi_entry = proc_create("horae_qmi", 0666, NULL, &proc_horae_qmi_fops);
+	if (!horae_qmi_entry)
+		pr_err("horae_qmi proc create failed!\n");
 
 	return 0;
 

@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
  * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef __KGSL_PWRCTRL_H
@@ -87,7 +86,6 @@ struct kgsl_pwrlevel {
  * @default_pwrlevel - device wake up power level
  * @max_pwrlevel - maximum allowable powerlevel per the user
  * @min_pwrlevel - minimum allowable powerlevel per the user
- * @min_render_pwrlevel - minimum allowable powerlevel for rendering
  * @num_pwrlevels - number of available power levels
  * @throttle_mask - LM throttle mask
  * @interval_timeout - timeout to be idle before a power event
@@ -131,7 +129,6 @@ struct kgsl_pwrctrl {
 	unsigned int wakeup_maxpwrlevel;
 	unsigned int max_pwrlevel;
 	unsigned int min_pwrlevel;
-	unsigned int min_render_pwrlevel;
 	unsigned int num_pwrlevels;
 	unsigned int throttle_mask;
 	u32 interval_timeout;

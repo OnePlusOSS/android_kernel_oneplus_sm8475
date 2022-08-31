@@ -98,10 +98,8 @@ void teedev_ctx_put(struct tee_context *ctx)
 
 static void teedev_close_context(struct tee_context *ctx)
 {
-	struct tee_device *teedev = ctx->teedev;
-
+	tee_device_put(ctx->teedev);
 	teedev_ctx_put(ctx);
-	tee_device_put(teedev);
 }
 
 static int tee_open(struct inode *inode, struct file *filp)

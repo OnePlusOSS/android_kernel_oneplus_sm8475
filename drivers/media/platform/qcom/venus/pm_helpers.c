@@ -147,12 +147,14 @@ static u32 load_per_type(struct venus_core *core, u32 session_type)
 	struct venus_inst *inst = NULL;
 	u32 mbs_per_sec = 0;
 
+	mutex_lock(&core->lock);
 	list_for_each_entry(inst, &core->instances, list) {
 		if (inst->session_type != session_type)
 			continue;
 
 		mbs_per_sec += load_per_instance(inst);
 	}
+	mutex_unlock(&core->lock);
 
 	return mbs_per_sec;
 }
@@ -201,12 +203,14 @@ static int load_scale_bw(struct venus_core *core)
 	struct venus_inst *inst = NULL;
 	u32 mbs_per_sec, avg, peak, total_avg = 0, total_peak = 0;
 
+	mutex_lock(&core->lock);
 	list_for_each_entry(inst, &core->instances, list) {
 		mbs_per_sec = load_per_instance(inst);
 		mbs_to_bw(inst, mbs_per_sec, &avg, &peak);
 		total_avg += avg;
 		total_peak += peak;
 	}
+	mutex_unlock(&core->lock);
 
 	/*
 	 * keep minimum bandwidth vote for "video-mem" path,
@@ -233,9 +237,8 @@ static int load_scale_v1(struct venus_inst *inst)
 	struct device *dev = core->dev;
 	u32 mbs_per_sec;
 	unsigned int i;
-	int ret = 0;
+	int ret;
 
-	mutex_lock(&core->lock);
 	mbs_per_sec = load_per_type(core, VIDC_SESSION_TYPE_ENC) +
 		      load_per_type(core, VIDC_SESSION_TYPE_DEC);
 
@@ -260,28 +263,29 @@ set_freq:
 	if (ret) {
 		dev_err(dev, "failed to set clock rate %lu (%d)\n",
 			freq, ret);
-		goto exit;
+		return ret;
 	}
 
 	ret = load_scale_bw(core);
 	if (ret) {
 		dev_err(dev, "failed to set bandwidth (%d)\n",
 			ret);
-		goto exit;
+		return ret;
 	}
 
-exit:
-	mutex_unlock(&core->lock);
-	return ret;
+	return 0;
 }
 
-static int core_get_v1(struct venus_core *core)
+static int core_get_v1(struct device *dev)
 {
+	struct venus_core *core = dev_get_drvdata(dev);
+
 	return core_clks_get(core);
 }
 
-static int core_power_v1(struct venus_core *core, int on)
+static int core_power_v1(struct device *dev, int on)
 {
+	struct venus_core *core = dev_get_drvdata(dev);
 	int ret = 0;
 
 	if (on == POWER_ON)
@@ -748,12 +752,12 @@ static int venc_power_v4(struct device *dev, int on)
 	return ret;
 }
 
-static int vcodec_domains_get(struct venus_core *core)
+static int vcodec_domains_get(struct device *dev)
 {
 	int ret;
 	struct opp_table *opp_table;
 	struct device **opp_virt_dev;
-	struct device *dev = core->dev;
+	struct venus_core *core = dev_get_drvdata(dev);
 	const struct venus_resources *res = core->res;
 	struct device *pd;
 	unsigned int i;
@@ -768,6 +772,13 @@ static int vcodec_domains_get(struct venus_core *core)
 			return PTR_ERR(pd);
 		core->pmdomains[i] = pd;
 	}
+
+	core->pd_dl_venus = device_link_add(dev, core->pmdomains[0],
+					    DL_FLAG_PM_RUNTIME |
+					    DL_FLAG_STATELESS |
+					    DL_FLAG_RPM_ACTIVE);
+	if (!core->pd_dl_venus)
+		return -ENODEV;
 
 skip_pmdomains:
 	if (!core->has_opp_table)
@@ -795,22 +806,28 @@ skip_pmdomains:
 opp_dl_add_err:
 	dev_pm_opp_detach_genpd(core->opp_table);
 opp_attach_err:
-	for (i = 0; i < res->vcodec_pmdomains_num; i++) {
-		if (IS_ERR_OR_NULL(core->pmdomains[i]))
-			continue;
-		dev_pm_domain_detach(core->pmdomains[i], true);
+	if (core->pd_dl_venus) {
+		device_link_del(core->pd_dl_venus);
+		for (i = 0; i < res->vcodec_pmdomains_num; i++) {
+			if (IS_ERR_OR_NULL(core->pmdomains[i]))
+				continue;
+			dev_pm_domain_detach(core->pmdomains[i], true);
+		}
 	}
-
 	return ret;
 }
 
-static void vcodec_domains_put(struct venus_core *core)
+static void vcodec_domains_put(struct device *dev)
 {
+	struct venus_core *core = dev_get_drvdata(dev);
 	const struct venus_resources *res = core->res;
 	unsigned int i;
 
 	if (!res->vcodec_pmdomains_num)
 		goto skip_pmdomains;
+
+	if (core->pd_dl_venus)
+		device_link_del(core->pd_dl_venus);
 
 	for (i = 0; i < res->vcodec_pmdomains_num; i++) {
 		if (IS_ERR_OR_NULL(core->pmdomains[i]))
@@ -828,9 +845,9 @@ skip_pmdomains:
 	dev_pm_opp_detach_genpd(core->opp_table);
 }
 
-static int core_get_v4(struct venus_core *core)
+static int core_get_v4(struct device *dev)
 {
-	struct device *dev = core->dev;
+	struct venus_core *core = dev_get_drvdata(dev);
 	const struct venus_resources *res = core->res;
 	int ret;
 
@@ -869,7 +886,7 @@ static int core_get_v4(struct venus_core *core)
 		}
 	}
 
-	ret = vcodec_domains_get(core);
+	ret = vcodec_domains_get(dev);
 	if (ret) {
 		if (core->has_opp_table)
 			dev_pm_opp_of_remove_table(dev);
@@ -880,14 +897,14 @@ static int core_get_v4(struct venus_core *core)
 	return 0;
 }
 
-static void core_put_v4(struct venus_core *core)
+static void core_put_v4(struct device *dev)
 {
-	struct device *dev = core->dev;
+	struct venus_core *core = dev_get_drvdata(dev);
 
 	if (legacy_binding)
 		return;
 
-	vcodec_domains_put(core);
+	vcodec_domains_put(dev);
 
 	if (core->has_opp_table)
 		dev_pm_opp_of_remove_table(dev);
@@ -896,33 +913,19 @@ static void core_put_v4(struct venus_core *core)
 
 }
 
-static int core_power_v4(struct venus_core *core, int on)
+static int core_power_v4(struct device *dev, int on)
 {
-	struct device *dev = core->dev;
-	struct device *pmctrl = core->pmdomains[0];
+	struct venus_core *core = dev_get_drvdata(dev);
 	int ret = 0;
 
 	if (on == POWER_ON) {
-		if (pmctrl) {
-			ret = pm_runtime_get_sync(pmctrl);
-			if (ret < 0) {
-				pm_runtime_put_noidle(pmctrl);
-				return ret;
-			}
-		}
-
 		ret = core_clks_enable(core);
-		if (ret < 0 && pmctrl)
-			pm_runtime_put_sync(pmctrl);
 	} else {
 		/* Drop the performance state vote */
 		if (core->opp_pmdomain)
 			dev_pm_opp_set_rate(dev, 0);
 
 		core_clks_disable(core);
-
-		if (pmctrl)
-			pm_runtime_put_sync(pmctrl);
 	}
 
 	return ret;
@@ -959,13 +962,13 @@ static int load_scale_v4(struct venus_inst *inst)
 	struct device *dev = core->dev;
 	unsigned long freq = 0, freq_core1 = 0, freq_core2 = 0;
 	unsigned long filled_len = 0;
-	int i, ret = 0;
+	int i, ret;
 
 	for (i = 0; i < inst->num_input_bufs; i++)
 		filled_len = max(filled_len, inst->payloads[i]);
 
 	if (inst->session_type == VIDC_SESSION_TYPE_DEC && !filled_len)
-		return ret;
+		return 0;
 
 	freq = calculate_inst_freq(inst, filled_len);
 	inst->clk_data.freq = freq;
@@ -981,6 +984,7 @@ static int load_scale_v4(struct venus_inst *inst)
 			freq_core2 += inst->clk_data.freq;
 		}
 	}
+	mutex_unlock(&core->lock);
 
 	freq = max(freq_core1, freq_core2);
 
@@ -1004,19 +1008,17 @@ set_freq:
 	if (ret) {
 		dev_err(dev, "failed to set clock rate %lu (%d)\n",
 			freq, ret);
-		goto exit;
+		return ret;
 	}
 
 	ret = load_scale_bw(core);
 	if (ret) {
 		dev_err(dev, "failed to set bandwidth (%d)\n",
 			ret);
-		goto exit;
+		return ret;
 	}
 
-exit:
-	mutex_unlock(&core->lock);
-	return ret;
+	return 0;
 }
 
 static const struct venus_pm_ops pm_ops_v4 = {

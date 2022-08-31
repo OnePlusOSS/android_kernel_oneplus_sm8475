@@ -7175,6 +7175,8 @@ static int fastrpc_cb_probe(struct device *dev)
 	sess->smmu.dev = dev;
 	sess->smmu.dev_name = dev_name(dev);
 	sess->smmu.enabled = 1;
+        /* Enabling best fit to check dma_buf_map_attachment failures persists*/
+        iommu_dma_enable_best_fit_algo(dev);
 
 	if (!sess->smmu.dev->dma_parms)
 		sess->smmu.dev->dma_parms = devm_kzalloc(sess->smmu.dev,

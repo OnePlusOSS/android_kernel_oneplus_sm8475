@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/mhi.h>
@@ -130,7 +131,7 @@ static int qcom_mhi_qrtr_probe(struct mhi_device *mhi_dev,
 
 	qrtr_mhi_of_parse(mhi_dev, &net_id, &rt);
 
-	rc = qrtr_endpoint_register(&qdev->ep, net_id, rt);
+	rc = qrtr_endpoint_register(&qdev->ep, net_id, rt, NULL);
 	if (rc)
 		return rc;
 

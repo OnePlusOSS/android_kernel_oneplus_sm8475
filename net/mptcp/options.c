@@ -368,10 +368,9 @@ static void schedule_3rdack_retransmission(struct sock *sk)
 
 	/* reschedule with a timeout above RTT, as we must look only for drop */
 	if (tp->srtt_us)
-		timeout = usecs_to_jiffies(tp->srtt_us >> (3 - 1));
+		timeout = tp->srtt_us << 1;
 	else
 		timeout = TCP_TIMEOUT_INIT;
-	timeout += jiffies;
 
 	WARN_ON_ONCE(icsk->icsk_ack.pending & ICSK_ACK_TIMER);
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;

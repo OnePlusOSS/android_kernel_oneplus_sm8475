@@ -291,9 +291,6 @@ enum filter_type {
 	WAY_ID,
 	OPCODE,
 	CACHEALLOC,
-	MEMTAGOPS,
-	MULTISCID,
-	DIRTYINFO,
 	UNKNOWN,
 };
 

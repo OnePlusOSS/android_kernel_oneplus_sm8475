@@ -22,7 +22,6 @@ arm_smmu.ko
 iommu-logger.ko
 qcom_iommu_util.ko
 qcom_llcc_pmu.ko
-qcom-pmu-lib.ko
 llcc-qcom.ko
 qmi_helpers.ko
 qcom_hwspinlock.ko
@@ -87,4 +86,3 @@ clk-spmi-pmic-div.ko
 qcom_pm8008-regulator.ko
 bq256xx_charger.ko
 gh_virt_wdt.ko
-minidump.ko

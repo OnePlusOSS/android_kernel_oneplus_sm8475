@@ -1568,7 +1568,7 @@ static void adreno_fault_header(struct kgsl_device *device,
 	if (!gx_on) {
 		if (drawobj != NULL)
 			pr_fault(device, drawobj,
-				"%s fault ctx %u ctx_type %s ts %u and GX is OFF\n",
+				"%s fault ctx %d ctx_type %s ts %u and GX is OFF\n",
 				type, drawobj->context->id,
 				kgsl_context_type(drawctxt->type),
 				drawobj->timestamp);
@@ -1599,7 +1599,7 @@ static void adreno_fault_header(struct kgsl_device *device,
 			ib2base, ib2sz, drawctxt->rb->id);
 
 		pr_fault(device, drawobj,
-			"%s fault ctx %u ctx_type %s ts %u status %8.8X rb %4.4x/%4.4x ib1 %16.16llX/%4.4x ib2 %16.16llX/%4.4x\n",
+			"%s fault ctx %d ctx_type %s ts %u status %8.8X rb %4.4x/%4.4x ib1 %16.16llX/%4.4x ib2 %16.16llX/%4.4x\n",
 			type, drawobj->context->id,
 			kgsl_context_type(drawctxt->type),
 			drawobj->timestamp, status,
@@ -1907,7 +1907,7 @@ replay:
 
 		if (ret) {
 			pr_context(device, replay[i]->base.context,
-				"gpu reset failed ctx %u ts %u\n",
+				"gpu reset failed ctx %d ts %u\n",
 				replay[i]->base.context->id,
 				replay[i]->base.timestamp);
 
@@ -2025,6 +2025,11 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 	if (gx_on)
 		adreno_readreg64(adreno_dev, ADRENO_REG_CP_RB_BASE,
 			ADRENO_REG_CP_RB_BASE_HI, &base);
+
+#ifdef CONFIG_OPLUS_GPU_MINIDUMP
+//MULTIMEIDA.FEATURE.GPU.MINIDUMP, 2021/07/26, add for oplus gpu mini dump
+	device->snapshotfault = fault;
+#endif
 
 	/*
 	 * Force the CP off for anything but a hard fault to make sure it is
@@ -2165,7 +2170,7 @@ static void _print_recovery(struct kgsl_device *device,
 	struct kgsl_drawobj *drawobj = DRAWOBJ(cmdobj);
 
 	pr_context(device, drawobj->context,
-		"gpu %s ctx %u ts %u policy %lX\n",
+		"gpu %s ctx %d ts %u policy %lX\n",
 		_ft_type(nr), drawobj->context->id, drawobj->timestamp,
 		cmdobj->fault_recovery);
 }
@@ -2300,7 +2305,7 @@ static void _adreno_dispatch_check_timeout(struct adreno_device *adreno_dev,
 	if (drawobj->context->flags & KGSL_CONTEXT_NO_FAULT_TOLERANCE)
 		return;
 
-	pr_context(device, drawobj->context, "gpu timeout ctx %u ts %u\n",
+	pr_context(device, drawobj->context, "gpu timeout ctx %d ts %u\n",
 		drawobj->context->id, drawobj->timestamp);
 
 	adreno_set_gpu_fault(adreno_dev, ADRENO_TIMEOUT_FAULT);

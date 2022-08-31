@@ -15,6 +15,14 @@ static int __maybe_unused two = 2;
 static int __maybe_unused four = 4;
 static int one_hundred = 100;
 static int one_thousand = 1000;
+#ifdef CONFIG_OPLUS_FEATURE_INPUT_BOOST
+extern int sysctl_slide_boost_enabled;
+extern int sysctl_boost_task_threshold;
+extern int sysctl_frame_rate;
+extern int sysctl_input_boost_enabled;
+extern int oplus_input_boost_ctrl_handler(struct ctl_table * table, int write, void __user * buffer, size_t * lenp, loff_t * ppos);
+extern int oplus_slide_boost_ctrl_handler(struct ctl_table * table, int write, void __user * buffer, size_t * lenp, loff_t * ppos);
+#endif
 
 /*
  * CFS task prio range is [100 ... 139]
@@ -56,7 +64,8 @@ unsigned int sysctl_walt_low_latency_task_threshold; /* disabled by default */
 unsigned int sysctl_sched_conservative_pl;
 unsigned int sysctl_sched_min_task_util_for_boost = 51;
 unsigned int sysctl_sched_min_task_util_for_uclamp = 51;
-unsigned int sysctl_sched_min_task_util_for_colocation = 35;
+/* keep it to max value by default */
+unsigned int sysctl_sched_min_task_util_for_colocation = 1000;
 unsigned int sysctl_sched_many_wakeup_threshold = WALT_MANY_WAKEUP_DEFAULT;
 const int sched_user_hint_max = 1000;
 unsigned int sysctl_walt_rtg_cfs_boost_prio = 99; /* disabled by default */
@@ -449,7 +458,7 @@ struct ctl_table input_boost_sysctls[] = {
 		.procname	= "input_boost_freq",
 		.data		= &sysctl_input_boost_freq,
 		.maxlen		= sizeof(unsigned int) * 8,
-		.mode		= 0644,
+		.mode		= 0664,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_INT_MAX,
@@ -860,11 +869,41 @@ struct ctl_table walt_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
 	},
+#ifdef CONFIG_OPLUS_FEATURE_INPUT_BOOST
+	{
+		.procname	= "slide_boost_enabled",
+		.data		= &sysctl_slide_boost_enabled,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0666,
+		.proc_handler	= oplus_slide_boost_ctrl_handler,
+	},
+	{
+		.procname	= "boost_task_threshold",
+		.data		= &sysctl_boost_task_threshold,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0666,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "frame_rate",
+		.data		= &sysctl_frame_rate,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0666,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "input_boost_enabled",
+		.data		= &sysctl_input_boost_enabled,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0666,
+		.proc_handler	= oplus_input_boost_ctrl_handler,
+	},
+#endif
 	{
 		.procname	= "sched_asymcap_boost",
 		.data		= &sysctl_sched_asymcap_boost,
 		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
+		.mode		= 0664,
 		.proc_handler	= proc_douintvec_minmax,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
@@ -890,9 +929,9 @@ void walt_tunables(void)
 		sysctl_sched_capacity_margin_dn_pct[i] = 85; /* ~15% margin */
 	}
 
-	sysctl_sched_group_upmigrate_pct = 100;
+	sysctl_sched_group_upmigrate_pct = 400;
 
-	sysctl_sched_group_downmigrate_pct = 95;
+	sysctl_sched_group_downmigrate_pct = 380;
 
 	sysctl_sched_asym_cap_sibling_freq_match_pct = 100;
 

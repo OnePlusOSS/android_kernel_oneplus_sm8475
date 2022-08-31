@@ -222,6 +222,7 @@ static int venus_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	core->dev = dev;
+	platform_set_drvdata(pdev, core);
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	core->base = devm_ioremap_resource(dev, r);
@@ -251,7 +252,7 @@ static int venus_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	if (core->pm_ops->core_get) {
-		ret = core->pm_ops->core_get(core);
+		ret = core->pm_ops->core_get(dev);
 		if (ret)
 			return ret;
 	}
@@ -276,12 +277,6 @@ static int venus_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_core_put;
 
-	ret = v4l2_device_register(dev, &core->v4l2_dev);
-	if (ret)
-		goto err_core_deinit;
-
-	platform_set_drvdata(pdev, core);
-
 	pm_runtime_enable(dev);
 
 	ret = pm_runtime_get_sync(dev);
@@ -294,11 +289,11 @@ static int venus_probe(struct platform_device *pdev)
 
 	ret = venus_firmware_init(core);
 	if (ret)
-		goto err_of_depopulate;
+		goto err_runtime_disable;
 
 	ret = venus_boot(core);
 	if (ret)
-		goto err_firmware_deinit;
+		goto err_runtime_disable;
 
 	ret = hfi_core_resume(core, true);
 	if (ret)
@@ -316,6 +311,10 @@ static int venus_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_venus_shutdown;
 
+	ret = v4l2_device_register(dev, &core->v4l2_dev);
+	if (ret)
+		goto err_core_deinit;
+
 	ret = pm_runtime_put_sync(dev);
 	if (ret) {
 		pm_runtime_get_noresume(dev);
@@ -328,22 +327,18 @@ static int venus_probe(struct platform_device *pdev)
 
 err_dev_unregister:
 	v4l2_device_unregister(&core->v4l2_dev);
+err_core_deinit:
+	hfi_core_deinit(core, false);
 err_venus_shutdown:
 	venus_shutdown(core);
-err_firmware_deinit:
-	venus_firmware_deinit(core);
-err_of_depopulate:
-	of_platform_depopulate(dev);
 err_runtime_disable:
 	pm_runtime_put_noidle(dev);
 	pm_runtime_set_suspended(dev);
 	pm_runtime_disable(dev);
 	hfi_destroy(core);
-err_core_deinit:
-	hfi_core_deinit(core, false);
 err_core_put:
 	if (core->pm_ops->core_put)
-		core->pm_ops->core_put(core);
+		core->pm_ops->core_put(dev);
 	return ret;
 }
 
@@ -369,12 +364,11 @@ static int venus_remove(struct platform_device *pdev)
 	pm_runtime_disable(dev);
 
 	if (pm_ops->core_put)
-		pm_ops->core_put(core);
-
-	v4l2_device_unregister(&core->v4l2_dev);
+		pm_ops->core_put(dev);
 
 	hfi_destroy(core);
 
+	v4l2_device_unregister(&core->v4l2_dev);
 	mutex_destroy(&core->pm_lock);
 	mutex_destroy(&core->lock);
 	venus_dbgfs_deinit(core);
@@ -393,7 +387,7 @@ static __maybe_unused int venus_runtime_suspend(struct device *dev)
 		return ret;
 
 	if (pm_ops->core_power) {
-		ret = pm_ops->core_power(core, POWER_OFF);
+		ret = pm_ops->core_power(dev, POWER_OFF);
 		if (ret)
 			return ret;
 	}
@@ -411,8 +405,7 @@ static __maybe_unused int venus_runtime_suspend(struct device *dev)
 err_video_path:
 	icc_set_bw(core->cpucfg_path, kbps_to_icc(1000), 0);
 err_cpucfg_path:
-	if (pm_ops->core_power)
-		pm_ops->core_power(core, POWER_ON);
+	pm_ops->core_power(dev, POWER_ON);
 
 	return ret;
 }
@@ -432,7 +425,7 @@ static __maybe_unused int venus_runtime_resume(struct device *dev)
 		return ret;
 
 	if (pm_ops->core_power) {
-		ret = pm_ops->core_power(core, POWER_ON);
+		ret = pm_ops->core_power(dev, POWER_ON);
 		if (ret)
 			return ret;
 	}

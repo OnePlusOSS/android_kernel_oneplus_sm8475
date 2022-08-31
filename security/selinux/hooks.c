@@ -948,22 +948,18 @@ out:
 static int selinux_add_opt(int token, const char *s, void **mnt_opts)
 {
 	struct selinux_mnt_opts *opts = *mnt_opts;
-	bool is_alloc_opts = false;
 
 	if (token == Opt_seclabel)	/* eaten and completely ignored */
 		return 0;
-
-	if (!s)
-		return -ENOMEM;
 
 	if (!opts) {
 		opts = kzalloc(sizeof(struct selinux_mnt_opts), GFP_KERNEL);
 		if (!opts)
 			return -ENOMEM;
 		*mnt_opts = opts;
-		is_alloc_opts = true;
 	}
-
+	if (!s)
+		return -ENOMEM;
 	switch (token) {
 	case Opt_context:
 		if (opts->context || opts->defcontext)
@@ -988,10 +984,6 @@ static int selinux_add_opt(int token, const char *s, void **mnt_opts)
 	}
 	return 0;
 Einval:
-	if (is_alloc_opts) {
-		kfree(opts);
-		*mnt_opts = NULL;
-	}
 	pr_warn(SEL_MOUNT_FAIL_MSG);
 	return -EINVAL;
 }
@@ -2018,12 +2010,12 @@ static inline u32 open_file_to_av(struct file *file)
 static int selinux_binder_set_context_mgr(const struct cred *mgr)
 {
 	return avc_has_perm(&selinux_state,
-			    current_sid(), cred_sid(mgr), SECCLASS_BINDER,
-			    BINDER__SET_CONTEXT_MGR, NULL);
+				current_sid(), cred_sid(mgr), SECCLASS_BINDER,
+				BINDER__SET_CONTEXT_MGR, NULL);
 }
 
 static int selinux_binder_transaction(const struct cred *from,
-				      const struct cred *to)
+					const struct cred *to)
 {
 	u32 mysid = current_sid();
 	u32 fromsid = cred_sid(from);
@@ -2039,16 +2031,16 @@ static int selinux_binder_transaction(const struct cred *from,
 	}
 
 	return avc_has_perm(&selinux_state, fromsid, tosid,
-			    SECCLASS_BINDER, BINDER__CALL, NULL);
+				SECCLASS_BINDER, BINDER__CALL, NULL);
 }
 
 static int selinux_binder_transfer_binder(const struct cred *from,
-					  const struct cred *to)
+						const struct cred *to)
 {
 	return avc_has_perm(&selinux_state,
-			    cred_sid(from), cred_sid(to),
-			    SECCLASS_BINDER, BINDER__TRANSFER,
-			    NULL);
+				cred_sid(from), cred_sid(to),
+				SECCLASS_BINDER, BINDER__TRANSFER,
+				NULL);
 }
 
 static int selinux_binder_transfer_file(const struct cred *from,
@@ -5732,7 +5724,7 @@ static unsigned int selinux_ip_postroute_compat(struct sk_buff *skb,
 	struct common_audit_data ad;
 	struct lsm_network_audit net = {0,};
 	char *addrp;
-	u8 proto = 0;
+	u8 proto;
 
 	if (sk == NULL)
 		return NF_ACCEPT;

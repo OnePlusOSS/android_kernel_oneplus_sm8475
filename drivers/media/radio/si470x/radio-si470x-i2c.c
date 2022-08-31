@@ -368,7 +368,7 @@ static int si470x_i2c_probe(struct i2c_client *client)
 	if (radio->hdl.error) {
 		retval = radio->hdl.error;
 		dev_err(&client->dev, "couldn't register control\n");
-		goto err_all;
+		goto err_dev;
 	}
 
 	/* video device initialization */
@@ -463,6 +463,7 @@ static int si470x_i2c_probe(struct i2c_client *client)
 	return 0;
 err_all:
 	v4l2_ctrl_handler_free(&radio->hdl);
+err_dev:
 	v4l2_device_unregister(&radio->v4l2_dev);
 err_initial:
 	return retval;

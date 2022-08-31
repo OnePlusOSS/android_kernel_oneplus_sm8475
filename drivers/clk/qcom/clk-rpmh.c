@@ -588,6 +588,9 @@ static struct clk_hw *diwali_rpmh_clocks[] = {
 	[RPMH_RF_CLK3_A]	= &lahaina_rf_clk3_ao.hw,
 	[RPMH_RF_CLK4]		= &lahaina_rf_clk4.hw,
 	[RPMH_RF_CLK4_A]	= &lahaina_rf_clk4_ao.hw,
+	[RPMH_RF_CLK5]		= &waipio_rf_clk5.hw,
+	[RPMH_RF_CLK5_A]	= &waipio_rf_clk5_ao.hw,
+/* endif */
 	[RPMH_IPA_CLK]		= &lahaina_ipa.hw,
 };
 

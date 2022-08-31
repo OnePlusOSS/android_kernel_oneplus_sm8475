@@ -12,6 +12,15 @@
 #include <../../../drivers/android/binder_internal.h>
 #include "../../../drivers/android/binder_trace.h"
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+#include <../kernel/oplus_perf_sched/sched_assist/sa_fair.h>
+#include <../kernel/oplus_perf_sched/sched_assist/sa_common.h>
+#endif
+#ifdef CONFIG_OPLUS_FEATURE_INPUT_BOOST
+#include "tuning/frame_boost_group.h"
+#include "tuning/webview_boost.h"
+#include "tuning/cluster_boost.h"
+#endif
 static void create_util_to_cost_pd(struct em_perf_domain *pd)
 {
 	int util, cpu = cpumask_first(to_cpumask(pd->cpus));
@@ -68,6 +77,9 @@ bias_to_this_cpu(struct task_struct *p, int cpu, int start_cpu)
 	bool start_cap_test = (capacity_orig_of(cpu) >=
 					capacity_orig_of(start_cpu));
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	base_test = base_test && task_tpd_check(p, cpu);
+#endif
 	return base_test && start_cap_test;
 }
 
@@ -107,7 +119,11 @@ struct find_best_target_env {
  * utilization of the specified task, whenever the task is currently
  * contributing to the CPU utilization.
  */
+#ifdef CONFIG_OPLUS_FEATURE_INPUT_BOOST
+unsigned long cpu_util_without(int cpu, struct task_struct *p)
+#else
 static unsigned long cpu_util_without(int cpu, struct task_struct *p)
+#endif
 {
 	unsigned int util;
 
@@ -168,6 +184,12 @@ static void walt_get_indicies(struct task_struct *p, int *order_index,
 	if (num_sched_clusters <= 1)
 		return;
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	if (should_ux_task_skip_eas(p)) {
+		*energy_eval_needed = false;
+	}
+#endif
+
 	if (per_task_boost > TASK_BOOST_ON_MID) {
 		*order_index = num_sched_clusters - 1;
 		*energy_eval_needed = false;
@@ -218,6 +240,14 @@ enum fastpaths {
 	NONE = 0,
 	SYNC_WAKEUP,
 	PREV_CPU_FASTPATH,
+#ifdef CONFIG_OPLUS_FEATURE_INPUT_BOOST
+	FRAME_BOOST_GROUP,
+	WEBVIEW_BOOST,
+	CLUSTER_BOOST,
+#endif
+#ifdef CONFIG_OPLUS_FEATURE_SCHED_SPREAD
+	NR_WAKEUP_SELECT,
+#endif /* CONFIG_OPLUS_FEATURE_SCHED_SPREAD */
 };
 
 static inline bool is_complex_sibling_idle(int cpu)
@@ -252,6 +282,9 @@ static void walt_find_best_target(struct sched_domain *sd,
 	bool rtg_high_prio_task = task_rtg_high_prio(p);
 	cpumask_t visit_cpus;
 	struct walt_task_struct *wts = (struct walt_task_struct *) p->android_vendor_data1;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	cpumask_t new_allowed_cpus;
+#endif
 
 	/* Find start CPU based on boost value */
 	start_cpu = fbt_env->start_cpu;
@@ -281,6 +314,19 @@ static void walt_find_best_target(struct sched_domain *sd,
 		goto out;
 	}
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	cpumask_copy(&new_allowed_cpus, &p->cpus_mask);
+	task_tpd_mask(p, &new_allowed_cpus);
+#endif
+#ifdef CONFIG_OPLUS_FEATURE_SCHED_SPREAD
+	/* enabled nr-balance to spread tasks */
+	sched_assist_spread_tasks(p, new_allowed_cpus, fbt_env->order_index, fbt_env->end_index,
+		fbt_env->skip_cpu, candidates, fbt_env->strict_max);
+	if (!cpumask_empty(candidates)) {
+		fbt_env->fastpath = NR_WAKEUP_SELECT;
+		goto out;
+	}
+#endif /* CONFIG_OPLUS_FEATURE_SCHED_SPREAD */
 	for (cluster = 0; cluster < num_sched_clusters; cluster++) {
 		int best_idle_cpu_cluster = -1;
 		int target_cpu_cluster = -1;
@@ -291,7 +337,11 @@ static void walt_find_best_target(struct sched_domain *sd,
 		min_exit_latency = INT_MAX;
 		best_idle_cuml_util = ULONG_MAX;
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+		cpumask_and(&visit_cpus, &new_allowed_cpus,
+#else
 		cpumask_and(&visit_cpus, &p->cpus_mask,
+#endif
 				&cpu_array[order_index][cluster]);
 		for_each_cpu(i, &visit_cpus) {
 			unsigned long capacity_orig = capacity_orig_of(i);
@@ -299,6 +349,8 @@ static void walt_find_best_target(struct sched_domain *sd,
 			long spare_cap;
 			unsigned int idle_exit_latency = UINT_MAX;
 			struct walt_rq *wrq = (struct walt_rq *) cpu_rq(i)->android_vendor_data1;
+			struct task_struct *curr = cpu_rq(i)->curr;
+			bool curr_is_mvp = false;
 
 			trace_sched_cpu_util(i);
 			/* record the prss as we visit cpus in a cluster */
@@ -307,6 +359,10 @@ static void walt_find_best_target(struct sched_domain *sd,
 			if (!cpu_active(i))
 				continue;
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+			if (should_ux_task_skip_cpu(p, i))
+				continue;
+#endif
 			/*
 			 * This CPU is the target of an active migration that's
 			 * yet to complete. Avoid placing another task on it.
@@ -320,7 +376,10 @@ static void walt_find_best_target(struct sched_domain *sd,
 			if (fbt_env->skip_cpu == i)
 				continue;
 
-			if (wrq->num_mvp_tasks > 0)
+			raw_spin_lock(&cpu_rq(i)->lock);
+			curr_is_mvp = is_mvp_task(cpu_rq(i), curr);
+			raw_spin_unlock(&cpu_rq(i)->lock);
+			if (curr_is_mvp)
 				continue;
 
 			/*
@@ -567,6 +626,11 @@ static inline unsigned long walt_em_cpu_energy(struct em_perf_domain *pd,
 	int cpu;
 	struct walt_rq *wrq;
 
+#ifdef CONFIG_OPLUS_FEATURE_SUGOV_TL
+	unsigned int tl = 80;
+	struct cpufreq_policy *policy;
+#endif /* CONFIG_OPLUS_FEATURE_SUGOV_TL */
+
 	if (!sum_util)
 		return 0;
 
@@ -578,7 +642,18 @@ static inline unsigned long walt_em_cpu_energy(struct em_perf_domain *pd,
 	cpu = cpumask_first(to_cpumask(pd->cpus));
 	scale_cpu = arch_scale_cpu_capacity(cpu);
 
+#ifdef CONFIG_OPLUS_FEATURE_SUGOV_TL
+	policy = cpufreq_cpu_get(cpu);
+
+	if (policy) {
+		tl = get_targetload(policy);
+		cpufreq_cpu_put(policy);
+	}
+
+	max_util = max_util * 100 / tl;
+#else /* !CONFIG_OPLUS_FEATURE_SUGOV_TL */
 	max_util = max_util + (max_util >> 2); /* account  for TARGET_LOAD usually 80 */
+#endif /* CONFIG_OPLUS_FEATURE_SUGOV_TL */
 	max_util = max(max_util,
 			(arch_scale_freq_capacity(cpu) * scale_cpu) >>
 			SCHED_CAPACITY_SHIFT);
@@ -771,6 +846,10 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 	int first_cpu;
 	bool energy_eval_needed = true;
 	struct compute_energy_output output;
+#ifdef CONFIG_OPLUS_FEATURE_INPUT_BOOST
+	int fbg_best_cpu = -1;
+	struct cpumask *fbg_target = NULL;
+#endif
 
 	if (walt_is_many_wakeup(sibling_count_hint) && prev_cpu != cpu &&
 			cpumask_test_cpu(prev_cpu, &p->cpus_mask))
@@ -802,6 +881,38 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 	if (sync && (need_idle || (is_rtg && curr_is_rtg)))
 		sync = 0;
 
+#ifdef CONFIG_OPLUS_FEATURE_INPUT_BOOST
+	fbg_cluster_boost(p, &fbg_best_cpu);
+	if (fbg_best_cpu >= 0) {
+		best_energy_cpu = fbg_best_cpu;
+		fbt_env.fastpath = CLUSTER_BOOST;
+		rcu_read_unlock();
+		goto frame_done;
+	}
+
+	if (need_frame_boost(p)) {
+		fbg_target = find_rtg_target(p);
+		if (fbg_target) {
+			/* full boost or heavy task, select prime cluster */
+			fbg_best_cpu = cpumask_first(fbg_target);
+			if ((cpumask_weight(fbg_target) == 1) && is_prime_fits(fbg_best_cpu)) {
+				best_energy_cpu = fbg_best_cpu;
+				fbt_env.fastpath = FRAME_BOOST_GROUP;
+				rcu_read_unlock();
+				goto frame_done;
+			}
+
+			fbg_best_cpu = find_fbg_cpu(p);
+			if (fbg_best_cpu >= 0) {
+				best_energy_cpu = fbg_best_cpu;
+				fbt_env.fastpath = FRAME_BOOST_GROUP;
+				rcu_read_unlock();
+				goto frame_done;
+			}
+		}
+	}
+	trace_select_fbg_cpu(p, is_full_throttle_boost(), sched_assist_scene(SA_LAUNCH), (fbg_target == NULL), fbg_best_cpu);
+#endif
 	if (sysctl_sched_sync_hint_enable && sync
 			&& bias_to_this_cpu(p, cpu, start_cpu)) {
 		best_energy_cpu = cpu;
@@ -823,6 +934,12 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 			   cpu : -1;
 
 	walt_find_best_target(NULL, candidates, p, &fbt_env);
+#ifdef CONFIG_OPLUS_FEATURE_SCHED_SPREAD
+	if (fbt_env.fastpath == NR_WAKEUP_SELECT) {
+		best_energy_cpu = cpumask_first(candidates);
+		goto unlock;
+	}
+#endif /* CONFIG_OPLUS_FEATURE_SCHED_SPREAD */
 
 	/* Bail out if no candidate was found. */
 	weight = cpumask_weight(candidates);
@@ -915,6 +1032,12 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 unlock:
 	rcu_read_unlock();
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	set_ux_task_to_prefer_cpu(p, &best_energy_cpu);
+#endif
+#ifdef CONFIG_OPLUS_FEATURE_INPUT_BOOST
+frame_done:
+#endif
 	trace_sched_task_util(p, cpumask_bits(candidates)[0], best_energy_cpu,
 			sync, fbt_env.need_idle, fbt_env.fastpath,
 			start_t, uclamp_boost, start_cpu);
@@ -1014,6 +1137,8 @@ static void binder_restore_priority_hook(void *data,
  */
 static inline int walt_get_mvp_task_prio(struct task_struct *p)
 {
+	/* With oplus sched assist feature, we don't need mvp task */
+#if (!IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST))
 	if (per_task_boost(p) == TASK_BOOST_STRICT_MAX)
 		return WALT_TASK_BOOST_MVP;
 
@@ -1023,6 +1148,7 @@ static inline int walt_get_mvp_task_prio(struct task_struct *p)
 	if (task_rtg_high_prio(p) || walt_procfs_low_latency_task(p) ||
 			walt_pipeline_low_latency_task(p))
 		return WALT_RTG_MVP;
+#endif
 
 	return WALT_NOT_MVP;
 }
@@ -1121,9 +1247,6 @@ static void walt_cfs_account_mvp_runtime(struct rq *rq, struct task_struct *curr
 		trace_walt_cfs_deactivate_mvp_task(curr, wts, limit);
 		return;
 	}
-
-	if (wrq->num_mvp_tasks == 1)
-		return;
 
 	/* slice expired. re-queue the task */
 	list_del(&wts->mvp_list);
@@ -1233,6 +1356,14 @@ static void walt_cfs_check_preempt_wakeup(void *unused, struct rq *rq, struct ta
 	p_is_mvp = !list_empty(&wts_p->mvp_list) && wts_p->mvp_list.next;
 	curr_is_mvp = !list_empty(&wts_c->mvp_list) && wts_c->mvp_list.next;
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	/* p and current are not mvp, junmp to oplus preemption decision */
+	if (!p_is_mvp && !curr_is_mvp) {
+		oplus_check_preempt_wakeup(rq, p, preempt, nopreempt);
+		return;
+	}
+#endif
+
 	/*
 	 * current is not MVP, so preemption decision
 	 * is simple.
@@ -1278,7 +1409,11 @@ static void walt_cfs_replace_next_task_fair(void *unused, struct rq *rq, struct 
 	struct task_struct *mvp;
 
 	if (unlikely(walt_disabled))
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+		goto opick;
+#else
 		return;
+#endif
 
 	if ((*p) && (*p) != prev && ((*p)->on_cpu == 1 || (*p)->on_rq == 0 ||
 				     (*p)->on_rq == TASK_ON_RQ_MIGRATING ||
@@ -1289,7 +1424,11 @@ static void walt_cfs_replace_next_task_fair(void *unused, struct rq *rq, struct 
 
 	/* We don't have MVP tasks queued */
 	if (list_empty(&wrq->mvp_tasks))
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+		goto opick;
+#else
 		return;
+#endif
 
 	/* Return the first task from MVP queue */
 	wts = list_first_entry(&wrq->mvp_tasks, struct walt_task_struct, mvp_list);
@@ -1307,6 +1446,12 @@ static void walt_cfs_replace_next_task_fair(void *unused, struct rq *rq, struct 
 			 (*p)->on_rq, (*p)->cpu, cpu_of(rq), ((*p)->flags & PF_KTHREAD));
 
 	trace_walt_cfs_mvp_pick_next(mvp, wts, walt_cfs_mvp_task_limit(mvp));
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+opick:
+	if (*repick == false)
+		oplus_replace_next_task_fair(rq, p, se, repick, simple);
+#endif
 }
 
 void walt_cfs_init(void)

@@ -1612,8 +1612,10 @@ static int cnss_pci_set_mhi_state(struct cnss_pci_data *pci_priv,
 	if (ret)
 		goto out;
 
+	#ifndef OPLUS_BUG_STABILITY
 	cnss_pr_vdbg("Setting MHI state: %s(%d)\n",
 		     cnss_mhi_state_to_str(mhi_state), mhi_state);
+	#endif /* OPLUS_BUG_STABILITY */
 
 	switch (mhi_state) {
 	case CNSS_MHI_INIT:
@@ -3235,9 +3237,9 @@ static int cnss_pci_runtime_suspend(struct device *dev)
 			return -EAGAIN;
 		}
 	}
-
+	#ifndef OPLUS_BUG_STABILITY
 	cnss_pr_vdbg("Runtime suspend start\n");
-
+	#endif /* OPLUS_BUG_STABILITY */
 	driver_ops = pci_priv->driver_ops;
 	if (driver_ops && driver_ops->runtime_ops &&
 	    driver_ops->runtime_ops->runtime_suspend)
@@ -3270,9 +3272,9 @@ static int cnss_pci_runtime_resume(struct device *dev)
 		cnss_pr_dbg("PCI link down recovery is in progress!\n");
 		return -EAGAIN;
 	}
-
+	#ifndef OPLUS_BUG_STABILITY
 	cnss_pr_vdbg("Runtime resume start\n");
-
+	#endif /* OPLUS_BUG_STABILITY */
 	driver_ops = pci_priv->driver_ops;
 	if (driver_ops && driver_ops->runtime_ops &&
 	    driver_ops->runtime_ops->runtime_resume)

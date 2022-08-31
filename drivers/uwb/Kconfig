@@ -1,0 +1,12 @@
+#
+# UWB device configuration
+#
+
+config UWB_NXP_SR100
+        tristate "Nxp Sr100 Uwb protocol driver (SPI) devices"
+        help
+          This enables the SPI driver for SR100 based devices.
+
+          If unsure, say N.
+
+          This selects UWB SPI support.

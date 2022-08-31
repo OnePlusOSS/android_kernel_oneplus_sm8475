@@ -255,6 +255,7 @@ int btfm_slim_disable_ch(struct btfmslim *btfmslim, struct btfmslim_ch *ch,
 	ch->dai.sruntime = NULL;
 
 	BTFMSLIM_INFO("btfm_num_ports_open: %d", btfm_num_ports_open);
+	chipset_ver = btpower_get_chipset_version();
 
 	chipset_ver = btpower_get_chipset_version();
 

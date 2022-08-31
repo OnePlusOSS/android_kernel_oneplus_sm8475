@@ -99,15 +99,12 @@ static struct firmware_cache fw_cache;
 extern struct builtin_fw __start_builtin_fw[];
 extern struct builtin_fw __end_builtin_fw[];
 
-static bool fw_copy_to_prealloc_buf(struct firmware *fw,
+static void fw_copy_to_prealloc_buf(struct firmware *fw,
 				    void *buf, size_t size)
 {
-	if (!buf)
-		return true;
-	if (size < fw->size)
-		return false;
+	if (!buf || size < fw->size)
+		return;
 	memcpy(buf, fw->data, fw->size);
-	return true;
 }
 
 static bool fw_get_builtin_firmware(struct firmware *fw, const char *name,
@@ -119,7 +116,9 @@ static bool fw_get_builtin_firmware(struct firmware *fw, const char *name,
 		if (strcmp(name, b_fw->name) == 0) {
 			fw->size = b_fw->size;
 			fw->data = b_fw->data;
-			return fw_copy_to_prealloc_buf(fw, buf, size);
+			fw_copy_to_prealloc_buf(fw, buf, size);
+
+			return true;
 		}
 	}
 
@@ -879,6 +878,25 @@ request_firmware(const struct firmware **firmware_p, const char *name,
 	return ret;
 }
 EXPORT_SYMBOL(request_firmware);
+
+#ifdef OPLUS_FEATURE_WIFI_BDF
+//Add for: reload wlan bdf without using cache
+int
+request_firmware_no_cache(const struct firmware **firmware_p, const char *name,
+                 struct device *device)
+{
+        int ret;
+
+        /* Need to pin this module until return */
+        __module_get(THIS_MODULE);
+        ret = _request_firmware(firmware_p, name, device, NULL, 0, 0,
+                                FW_OPT_UEVENT | FW_OPT_NOCACHE);
+        module_put(THIS_MODULE);
+        return ret;
+}
+EXPORT_SYMBOL(request_firmware_no_cache);
+#endif /* OPLUS_FEATURE_WIFI_BDF */
+
 
 /**
  * firmware_request_nowarn() - request for an optional fw module

@@ -31,6 +31,12 @@
 #include "qmi.h"
 #include "debug.h"
 #include "genl.h"
+#ifdef OPLUS_FEATURE_WIFI_BDF
+//Modify for: multi projects using different bdf
+#include <linux/fs.h>
+#include <asm/uaccess.h>
+#include <soc/oplus/system/oplus_project.h>
+#endif /* OPLUS_FEATURE_WIFI_BDF */
 
 #define WLFW_SERVICE_WCN_INS_ID_V01	3
 #define WLFW_SERVICE_INS_ID_V01		0
@@ -877,6 +883,10 @@ int icnss_wlfw_wlan_mac_req_send_sync(struct icnss_priv *priv,
 	struct wlfw_mac_addr_resp_msg_v01 resp = {0};
 	struct qmi_txn txn;
 	int ret;
+#ifdef OPLUS_FEATURE_WIFI_BDF
+    int i;
+    char revert_mac[QMI_WLFW_MAC_ADDR_SIZE_V01];
+#endif /* OPLUS_FEATURE_WIFI_BDF */
 
 	if (!priv || !mac || mac_len != QMI_WLFW_MAC_ADDR_SIZE_V01)
 		return -EINVAL;
@@ -892,7 +902,17 @@ int icnss_wlfw_wlan_mac_req_send_sync(struct icnss_priv *priv,
 
 	icnss_pr_dbg("Sending WLAN mac req [%pM], state: 0x%lx\n",
 			     mac, priv->state);
-	memcpy(req.mac_addr, mac, mac_len);
+#ifdef OPLUS_FEATURE_WIFI_BDF
+    for (i = 0; i < QMI_WLFW_MAC_ADDR_SIZE_V01 ; i ++){
+        revert_mac[i] = mac[QMI_WLFW_MAC_ADDR_SIZE_V01 - i -1];
+    }
+        icnss_pr_dbg("Sending revert WLAN mac req [%pM], state: 0x%lx\n",
+                revert_mac, priv->state);
+    memcpy(req.mac_addr, revert_mac, mac_len);
+#else
+    memcpy(req.mac_addr, mac, mac_len);
+#endif /* OPLUS_FEATURE_WIFI_BDF */
+
 	req.mac_addr_valid = 1;
 
 	ret = qmi_send_request(&priv->qmi, NULL, &txn,
@@ -1114,6 +1134,15 @@ int icnss_wlfw_bdf_dnld_send_sync(struct icnss_priv *priv, u32 bdf_type)
 	temp = fw_entry->data;
 	remaining = fw_entry->size;
 
+#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+    //Add for: check fw status for switch issue
+    if (bdf_type == ICNSS_BDF_REGDB) {
+        set_bit(CNSS_LOAD_REGDB_SUCCESS, &priv->loadRegdbState);
+    } else if (bdf_type == ICNSS_BDF_ELF){
+        set_bit(CNSS_LOAD_BDF_SUCCESS, &priv->loadBdfState);
+    }
+#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
+
 	icnss_pr_dbg("Downloading %s: %s, size: %u\n",
 		     icnss_bdf_type_to_str(bdf_type), filename, remaining);
 
@@ -1187,6 +1216,14 @@ int icnss_wlfw_bdf_dnld_send_sync(struct icnss_priv *priv, u32 bdf_type)
 err_send:
 	release_firmware(fw_entry);
 err_req_fw:
+#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+    //Add for: check fw status for switch issue
+    if (bdf_type == ICNSS_BDF_REGDB) {
+        set_bit(CNSS_LOAD_REGDB_FAIL, &priv->loadRegdbState);
+    } else if (bdf_type == ICNSS_BDF_ELF){
+        set_bit(CNSS_LOAD_BDF_FAIL, &priv->loadBdfState);
+    }
+#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
 	if (bdf_type != ICNSS_BDF_REGDB)
 		ICNSS_QMI_ASSERT();
 	kfree(req);
@@ -3376,79 +3413,5 @@ int icnss_wlfw_get_info_send_sync(struct icnss_priv *plat_priv, int type,
 out:
 	kfree(req);
 	kfree(resp);
-	return ret;
-}
-
-int wlfw_subsys_restart_level_msg(struct icnss_priv *penv, uint8_t restart_level)
-{
-	int ret;
-	struct wlfw_subsys_restart_level_req_msg_v01 *req;
-	struct wlfw_subsys_restart_level_resp_msg_v01 *resp;
-	struct qmi_txn txn;
-
-	if (!penv)
-		return -ENODEV;
-
-	if (test_bit(ICNSS_FW_DOWN, &penv->state))
-		return -EINVAL;
-
-	icnss_pr_dbg("Sending subsystem restart level: 0x%x\n", restart_level);
-
-	req = kzalloc(sizeof(*req), GFP_KERNEL);
-	if (!req)
-		return -ENOMEM;
-
-	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
-	if (!resp) {
-		kfree(req);
-		return -ENOMEM;
-	}
-
-	req->restart_level_type_valid = 1;
-	req->restart_level_type = restart_level;
-
-	penv->stats.restart_level_req++;
-
-	ret = qmi_txn_init(&penv->qmi, &txn,
-			   wlfw_subsys_restart_level_resp_msg_v01_ei, resp);
-	if (ret < 0) {
-		icnss_pr_err("Fail to init txn for subsystem restart level, resp %d\n",
-			     ret);
-		goto out;
-	}
-
-	ret = qmi_send_request(&penv->qmi, NULL, &txn,
-			       QMI_WLFW_SUBSYS_RESTART_LEVEL_REQ_V01,
-			       WLFW_SUBSYS_RESTART_LEVEL_REQ_MSG_V01_MAX_MSG_LEN,
-			       wlfw_subsys_restart_level_req_msg_v01_ei, req);
-	if (ret < 0) {
-		qmi_txn_cancel(&txn);
-		icnss_pr_err("Fail to send subsystem restart level %d\n",
-			     ret);
-		goto out;
-	}
-
-	ret = qmi_txn_wait(&txn, penv->ctrl_params.qmi_timeout);
-	if (ret < 0) {
-		icnss_pr_err("Subsystem restart level timed out with ret %d\n",
-			     ret);
-		goto out;
-	} else if (resp->resp.result != QMI_RESULT_SUCCESS_V01) {
-		icnss_pr_err("Subsystem restart level request rejected,result:%d error:%d\n",
-			     resp->resp.result, resp->resp.error);
-		ret = -resp->resp.result;
-		goto out;
-	}
-
-	penv->stats.restart_level_resp++;
-
-	kfree(resp);
-	kfree(req);
-	return 0;
-
-out:
-	kfree(req);
-	kfree(resp);
-	penv->stats.restart_level_err++;
 	return ret;
 }

@@ -4,9 +4,6 @@
 #include <linux/mm.h> /* for handle_mm_fault() */
 #include <linux/ftrace.h>
 
-extern void my_direct_func(struct vm_area_struct *vma,
-			   unsigned long address, unsigned int flags);
-
 void my_direct_func(struct vm_area_struct *vma,
 			unsigned long address, unsigned int flags)
 {

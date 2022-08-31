@@ -4234,7 +4234,7 @@ ext4_mb_release_group_pa(struct ext4_buddy *e4b,
  */
 static noinline_for_stack int
 ext4_mb_discard_group_preallocations(struct super_block *sb,
-				     ext4_group_t group, int *busy)
+					ext4_group_t group, int needed)
 {
 	struct ext4_group_info *grp = ext4_get_group_info(sb, group);
 	struct buffer_head *bitmap_bh = NULL;
@@ -4242,7 +4242,8 @@ ext4_mb_discard_group_preallocations(struct super_block *sb,
 	struct list_head list;
 	struct ext4_buddy e4b;
 	int err;
-	int free = 0;
+	int busy = 0;
+	int free, free_total = 0;
 
 	mb_debug(sb, "discard preallocation for group %u\n", group);
 	if (list_empty(&grp->bb_prealloc_list))
@@ -4265,14 +4266,19 @@ ext4_mb_discard_group_preallocations(struct super_block *sb,
 		goto out_dbg;
 	}
 
+	if (needed == 0)
+		needed = EXT4_CLUSTERS_PER_GROUP(sb) + 1;
+
 	INIT_LIST_HEAD(&list);
+repeat:
+	free = 0;
 	ext4_lock_group(sb, group);
 	list_for_each_entry_safe(pa, tmp,
 				&grp->bb_prealloc_list, pa_group_list) {
 		spin_lock(&pa->pa_lock);
 		if (atomic_read(&pa->pa_count)) {
 			spin_unlock(&pa->pa_lock);
-			*busy = 1;
+			busy = 1;
 			continue;
 		}
 		if (pa->pa_deleted) {
@@ -4312,13 +4318,22 @@ ext4_mb_discard_group_preallocations(struct super_block *sb,
 		call_rcu(&(pa)->u.pa_rcu, ext4_mb_pa_callback);
 	}
 
+	free_total += free;
+
+	/* if we still need more blocks and some PAs were used, try again */
+	if (free_total < needed && busy) {
+		ext4_unlock_group(sb, group);
+		cond_resched();
+		busy = 0;
+		goto repeat;
+	}
 	ext4_unlock_group(sb, group);
 	ext4_mb_unload_buddy(&e4b);
 	put_bh(bitmap_bh);
 out_dbg:
 	mb_debug(sb, "discarded (%d) blocks preallocated for group %u bb_free (%d)\n",
-		 free, group, grp->bb_free);
-	return free;
+		 free_total, group, grp->bb_free);
+	return free_total;
 }
 
 /*
@@ -4860,24 +4875,13 @@ static int ext4_mb_discard_preallocations(struct super_block *sb, int needed)
 {
 	ext4_group_t i, ngroups = ext4_get_groups_count(sb);
 	int ret;
-	int freed = 0, busy = 0;
-	int retry = 0;
+	int freed = 0;
 
 	trace_ext4_mb_discard_preallocations(sb, needed);
-
-	if (needed == 0)
-		needed = EXT4_CLUSTERS_PER_GROUP(sb) + 1;
- repeat:
 	for (i = 0; i < ngroups && needed > 0; i++) {
-		ret = ext4_mb_discard_group_preallocations(sb, i, &busy);
+		ret = ext4_mb_discard_group_preallocations(sb, i, needed);
 		freed += ret;
 		needed -= ret;
-		cond_resched();
-	}
-
-	if (needed > 0 && busy && ++retry < 3) {
-		busy = 0;
-		goto repeat;
 	}
 
 	return freed;
@@ -5173,8 +5177,7 @@ static ext4_fsblk_t ext4_mb_new_blocks_simple(handle_t *handle,
 	struct super_block *sb = ar->inode->i_sb;
 	ext4_group_t group;
 	ext4_grpblk_t blkoff;
-	ext4_grpblk_t max = EXT4_CLUSTERS_PER_GROUP(sb);
-	ext4_grpblk_t i = 0;
+	int i = sb->s_blocksize;
 	ext4_fsblk_t goal, block;
 	struct ext4_super_block *es = EXT4_SB(sb)->s_es;
 
@@ -5196,26 +5199,19 @@ static ext4_fsblk_t ext4_mb_new_blocks_simple(handle_t *handle,
 		ext4_get_group_no_and_offset(sb,
 			max(ext4_group_first_block_no(sb, group), goal),
 			NULL, &blkoff);
-		while (1) {
-			i = mb_find_next_zero_bit(bitmap_bh->b_data, max,
+		i = mb_find_next_zero_bit(bitmap_bh->b_data, sb->s_blocksize,
 						blkoff);
-			if (i >= max)
-				break;
-			if (ext4_fc_replay_check_excluded(sb,
-				ext4_group_first_block_no(sb, group) + i)) {
-				blkoff = i + 1;
-			} else
-				break;
-		}
 		brelse(bitmap_bh);
-		if (i < max)
-			break;
+		if (i >= sb->s_blocksize)
+			continue;
+		if (ext4_fc_replay_check_excluded(sb,
+			ext4_group_first_block_no(sb, group) + i))
+			continue;
+		break;
 	}
 
-	if (group >= ext4_get_groups_count(sb) || i >= max) {
-		*errp = -ENOSPC;
+	if (group >= ext4_get_groups_count(sb) && i >= sb->s_blocksize)
 		return 0;
-	}
 
 	block = ext4_group_first_block_no(sb, group) + i;
 	ext4_mb_mark_bb(sb, block, 1, 1);
@@ -5819,7 +5815,6 @@ out:
  */
 int ext4_trim_fs(struct super_block *sb, struct fstrim_range *range)
 {
-	struct request_queue *q = bdev_get_queue(sb->s_bdev);
 	struct ext4_group_info *grp;
 	ext4_group_t group, first_group, last_group;
 	ext4_grpblk_t cnt = 0, first_cluster, last_cluster;
@@ -5838,13 +5833,6 @@ int ext4_trim_fs(struct super_block *sb, struct fstrim_range *range)
 	    start >= max_blks ||
 	    range->len < sb->s_blocksize)
 		return -EINVAL;
-	/* No point to try to trim less than discard granularity */
-	if (range->minlen < q->limits.discard_granularity) {
-		minlen = EXT4_NUM_B2C(EXT4_SB(sb),
-			q->limits.discard_granularity >> sb->s_blocksize_bits);
-		if (minlen > EXT4_CLUSTERS_PER_GROUP(sb))
-			goto out;
-	}
 	if (end >= max_blks)
 		end = max_blks - 1;
 	if (end <= first_data_blk)

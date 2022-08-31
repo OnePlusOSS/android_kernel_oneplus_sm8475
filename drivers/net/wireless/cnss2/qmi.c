@@ -7,6 +7,13 @@
 #include <linux/module.h>
 #include <linux/soc/qcom/qmi.h>
 
+#ifdef OPLUS_FEATURE_WIFI_BDF
+//Modify for: multi projects using different bdf
+#include <linux/fs.h>
+#include <asm/uaccess.h>
+#include <soc/oplus/system/oplus_project.h>
+#endif /* OPLUS_FEATURE_WIFI_BDF */
+
 #include "bus.h"
 #include "debug.h"
 #include "main.h"
@@ -28,9 +35,19 @@
 #define HDS_FILE_NAME			"hds.bin"
 #define CHIP_ID_GF_MASK			0x10
 
-#define CONN_ROAM_FILE_NAME		"wlan-connection-roaming"
-#define INI_EXT			".ini"
-#define INI_FILE_NAME_LEN		100
+#ifdef OPLUS_FEATURE_WIFI_BDF
+//Modify for: multi projects using different bdf
+#define BDF_FILE_CHN_IN		"bdwlan.b0c"
+#define BDF_FILE_EU		"bdwlan.b0e"
+#define BDF_FILE_NA		"bdwlan.b0a"
+#define BDF_FILE_CHN_IN_GF	"bdwlang.b0c"
+#define BDF_FILE_EU_GF		"bdwlang.b0e"
+#define BDF_FILE_NA_GF		"bdwlang.b0a"
+#define REG_ID_CHN_IN		1
+#define REG_ID_EU		2
+#define REG_ID_NA		3
+#endif /* OPLUS_FEATURE_WIFI_BDF */
+
 
 #define QDSS_TRACE_CONFIG_FILE		"qdss_trace_config"
 #ifdef CONFIG_CNSS2_DEBUG
@@ -49,9 +66,6 @@
 #define QMI_WLFW_MAX_RECV_BUF_SIZE	SZ_8K
 #define IMSPRIVATE_SERVICE_MAX_MSG_LEN	SZ_8K
 #define DMS_QMI_MAX_MSG_LEN		SZ_256
-#define MAX_SHADOW_REG_RESERVED		2
-#define MAX_NUM_SHADOW_REG_V3	(QMI_WLFW_MAX_NUM_SHADOW_REG_V3_USAGE_V01 - \
-				 MAX_SHADOW_REG_RESERVED)
 
 #define QMI_WLFW_MAC_READY_TIMEOUT_MS	50
 #define QMI_WLFW_MAC_READY_MAX_RETRY	200
@@ -216,6 +230,19 @@ static void cnss_wlfw_host_cap_parse_mlo(struct cnss_plat_data *plat_priv,
 	}
 }
 
+#ifdef OPLUS_FEATURE_WIFI_WSA
+//Modify for wsa function in SMT mode
+static bool needSupportWsa() {
+	int project_id = get_project();
+	cnss_pr_dbg("project: %d\n", project_id);
+	if (project_id == 20846 || project_id == 20847 || project_id == 133194
+            || project_id == 21841 || project_id == 21842) {
+		return true;
+	}
+	return false;
+}
+#endif /* OPLUS_FEATURE_WIFI_WSA */
+
 static int cnss_wlfw_host_cap_send_sync(struct cnss_plat_data *plat_priv)
 {
 	struct wlfw_host_cap_req_msg_v01 *req;
@@ -251,6 +278,32 @@ static int cnss_wlfw_host_cap_send_sync(struct cnss_plat_data *plat_priv)
 
 	req->bdf_support_valid = 1;
 	req->bdf_support = 1;
+
+#ifdef OPLUS_FEATURE_WIFI_WSA
+//Modify for wsa function in SMT mode
+	if (needSupportWsa()) {
+		req->gpios_valid = 1;
+		/* Format of GPIO configuration -
+		*
+		* A_UINT32    default_output_val:1,   GPIO default Output value if direction is output
+		*             reserved1:7,   reserved bits
+		*             sw_func:4,     GPIO pin software function selection
+		*             pull:2,        GPIO Pull, TLMM_GPIO_CFGn.GPIO_PULL
+		*             func:4,        GPIO pin function, TLMM_GPIO_CFGn.FUNC_SEL
+		*             drive:3,       GPIO Drive, TLMM_GPIO_CFGn.DRV_STRENGTH
+		*             dir:1,         GPIO pin direction: PLAT_GPIO_DIR_INPUT/PLAT_GPIO_DIR_OUTPUT, TLMM_GPIO_CFGn.GPIO_OE
+		*             reserved0:2,   reserved bits
+		*             gpio_num:8;    GPIO pin number
+		*/
+		/* 1st GPIO */
+		req->gpios[0] = 0x38242F00;  // set GPIO 56 as output low by default
+
+		/* The Nth GPIO if any, and update req->gpios_len accordingly
+		* Ensure gpios_len less than QMI_WLFW_MAX_NUM_GPIO_V01
+		*/
+		req->gpios_len = 1;
+	}
+#endif /* OPLUS_FEATURE_WIFI_WSA */
 
 	req->m3_support_valid = 1;
 	req->m3_support = 1;
@@ -538,9 +591,6 @@ int cnss_wlfw_tgt_cap_send_sync(struct cnss_plat_data *plat_priv)
 	if (resp->hwid_bitmap_valid)
 		plat_priv->hwid_bitmap = resp->hwid_bitmap;
 
-	if (resp->ol_cpr_cfg_valid)
-		cnss_aop_ol_cpr_cfg_setup(plat_priv, &resp->ol_cpr_cfg);
-
 	cnss_pr_dbg("Target capability: chip_id: 0x%x, chip_family: 0x%x, board_id: 0x%x, soc_id: 0x%x, otp_version: 0x%x\n",
 		    plat_priv->chip_info.chip_id,
 		    plat_priv->chip_info.chip_family,
@@ -566,6 +616,53 @@ out:
 	return ret;
 }
 
+#ifdef OPLUS_FEATURE_WIFI_BDF
+//Modify for: multi projects using different bdf
+static bool is_prj_support_region_id() {
+        int project_id = get_project();
+        cnss_pr_dbg("project: %d\n", project_id);
+        if (project_id == 20846 || project_id == 20847 || project_id == 133194
+            || project_id == 21841 || project_id == 21842) {
+                return true;
+        }
+        return false;
+}
+
+static void cnss_get_oplus_bdf_file_name(struct cnss_plat_data *plat_priv, char* file_name, u32 filename_len) {
+	int reg_id = get_Operator_Version();
+	cnss_pr_dbg("region id: %d", reg_id);
+
+	if (plat_priv->chip_info.chip_id & CHIP_ID_GF_MASK) {
+		if (is_prj_support_region_id()) {
+			if (reg_id == REG_ID_CHN_IN) {
+				snprintf(file_name, filename_len, BDF_FILE_CHN_IN_GF);
+			} else if (reg_id == REG_ID_EU) {
+				snprintf(file_name, filename_len, BDF_FILE_EU_GF);
+			} else if (reg_id == REG_ID_NA) {
+				snprintf(file_name, filename_len, BDF_FILE_NA_GF);
+			} else {
+				snprintf(file_name, filename_len, ELF_BDF_FILE_NAME_GF);
+			}
+		} else {
+			snprintf(file_name, filename_len, ELF_BDF_FILE_NAME_GF);
+		}
+	} else {
+		if (is_prj_support_region_id()) {
+			if (reg_id == REG_ID_CHN_IN) {
+				snprintf(file_name, filename_len, BDF_FILE_CHN_IN);
+			} else if (reg_id == REG_ID_EU) {
+				snprintf(file_name, filename_len, BDF_FILE_EU);
+			} else if (reg_id == REG_ID_NA) {
+				snprintf(file_name, filename_len, BDF_FILE_NA);
+			} else {
+				snprintf(file_name, filename_len, ELF_BDF_FILE_NAME);
+			}
+		} else {
+			snprintf(file_name, filename_len, ELF_BDF_FILE_NAME);
+		}
+	}
+}
+#endif /* OPLUS_FEATURE_WIFI_BDF */
 static int cnss_get_bdf_file_name(struct cnss_plat_data *plat_priv,
 				  u32 bdf_type, char *filename,
 				  u32 filename_len)
@@ -577,12 +674,17 @@ static int cnss_get_bdf_file_name(struct cnss_plat_data *plat_priv,
 	case CNSS_BDF_ELF:
 		/* Board ID will be equal or less than 0xFF in GF mask case */
 		if (plat_priv->board_info.board_id == 0xFF) {
+#ifndef OPLUS_FEATURE_WIFI_BDF
+//Modify for: multi projects using different bdf
 			if (plat_priv->chip_info.chip_id & CHIP_ID_GF_MASK)
 				snprintf(filename_tmp, filename_len,
 					 ELF_BDF_FILE_NAME_GF);
 			else
 				snprintf(filename_tmp, filename_len,
 					 ELF_BDF_FILE_NAME);
+#else
+			cnss_get_oplus_bdf_file_name(plat_priv, filename_tmp, filename_len);
+#endif /* OPLUS_FEATURE_WIFI_BDF */
 		} else if (plat_priv->board_info.board_id < 0xFF) {
 			if (plat_priv->chip_info.chip_id & CHIP_ID_GF_MASK)
 				snprintf(filename_tmp, filename_len,
@@ -642,146 +744,6 @@ static int cnss_get_bdf_file_name(struct cnss_plat_data *plat_priv,
 	return ret;
 }
 
-int cnss_wlfw_ini_file_send_sync(struct cnss_plat_data *plat_priv,
-				 enum wlfw_ini_file_type_v01 file_type)
-{
-	struct wlfw_ini_file_download_req_msg_v01 *req;
-	struct wlfw_ini_file_download_resp_msg_v01 *resp;
-	struct qmi_txn txn;
-	int ret = 0;
-	const struct firmware *fw;
-	char filename[INI_FILE_NAME_LEN] = {0};
-	char tmp_filename[INI_FILE_NAME_LEN] = {0};
-	const u8 *temp;
-	unsigned int remaining;
-	bool backup_supported = false;
-
-	cnss_pr_info("INI File %u download\n", file_type);
-
-	req = kzalloc(sizeof(*req), GFP_KERNEL);
-	if (!req)
-		return -ENOMEM;
-
-	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
-	if (!resp) {
-		kfree(req);
-		return -ENOMEM;
-	}
-
-	switch (file_type) {
-	case WLFW_CONN_ROAM_INI_V01:
-		snprintf(tmp_filename, sizeof(tmp_filename),
-			 CONN_ROAM_FILE_NAME);
-		backup_supported = true;
-		break;
-	default:
-		cnss_pr_err("Invalid file type: %u\n", file_type);
-		ret = -EINVAL;
-		goto err_req_fw;
-	}
-
-	snprintf(filename, sizeof(filename), "%s%s", tmp_filename, INI_EXT);
-	/* Fetch the file */
-	ret = firmware_request_nowarn(&fw, filename, &plat_priv->plat_dev->dev);
-	if (ret) {
-		cnss_pr_err("Failed to get INI file %s (%d), Backup file: %s",
-			    filename, ret,
-			    backup_supported ? "Supported" : "Not Supported");
-
-		if (!backup_supported)
-			goto err_req_fw;
-
-		snprintf(filename, sizeof(filename),
-			 "%s-%s%s", tmp_filename, "backup", INI_EXT);
-
-		ret = firmware_request_nowarn(&fw, filename,
-					      &plat_priv->plat_dev->dev);
-		if (ret) {
-			cnss_pr_err("Failed to get INI file %s (%d)", filename,
-				    ret);
-			goto err_req_fw;
-		}
-	}
-
-	temp = fw->data;
-	remaining = fw->size;
-
-	cnss_pr_dbg("Downloading INI file: %s, size: %u\n", filename,
-		    remaining);
-
-	while (remaining) {
-		req->file_type_valid = 1;
-		req->file_type = file_type;
-		req->total_size_valid = 1;
-		req->total_size = remaining;
-		req->seg_id_valid = 1;
-		req->data_valid = 1;
-		req->end_valid = 1;
-
-		if (remaining > QMI_WLFW_MAX_DATA_SIZE_V01) {
-			req->data_len = QMI_WLFW_MAX_DATA_SIZE_V01;
-		} else {
-			req->data_len = remaining;
-			req->end = 1;
-		}
-
-		memcpy(req->data, temp, req->data_len);
-
-		ret = qmi_txn_init(&plat_priv->qmi_wlfw, &txn,
-				   wlfw_ini_file_download_resp_msg_v01_ei,
-				   resp);
-		if (ret < 0) {
-			cnss_pr_err("Failed to initialize txn for INI file download request, err: %d\n",
-				    ret);
-			goto err;
-		}
-
-		ret = qmi_send_request
-			(&plat_priv->qmi_wlfw, NULL, &txn,
-			 QMI_WLFW_INI_FILE_DOWNLOAD_REQ_V01,
-			 WLFW_INI_FILE_DOWNLOAD_REQ_MSG_V01_MAX_MSG_LEN,
-			 wlfw_ini_file_download_req_msg_v01_ei, req);
-		if (ret < 0) {
-			qmi_txn_cancel(&txn);
-			cnss_pr_err("Failed to send INI File download request, err: %d\n",
-				    ret);
-			goto err;
-		}
-
-		ret = qmi_txn_wait(&txn, QMI_WLFW_TIMEOUT_JF);
-		if (ret < 0) {
-			cnss_pr_err("Failed to wait for response of INI File download request, err: %d\n",
-				    ret);
-			goto err;
-		}
-
-		if (resp->resp.result != QMI_RESULT_SUCCESS_V01) {
-			cnss_pr_err("INI file download request failed, result: %d, err: %d\n",
-				    resp->resp.result, resp->resp.error);
-			ret = -resp->resp.result;
-			goto err;
-		}
-
-		remaining -= req->data_len;
-		temp += req->data_len;
-		req->seg_id++;
-	}
-
-	release_firmware(fw);
-
-	kfree(req);
-	kfree(resp);
-	return 0;
-
-err:
-	release_firmware(fw);
-err_req_fw:
-	kfree(req);
-	kfree(resp);
-
-	return ret;
-}
-
 int cnss_wlfw_bdf_dnld_send_sync(struct cnss_plat_data *plat_priv,
 				 u32 bdf_type)
 {
@@ -826,6 +788,15 @@ int cnss_wlfw_bdf_dnld_send_sync(struct cnss_plat_data *plat_priv,
 
 	temp = fw_entry->data;
 	remaining = fw_entry->size;
+
+	#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+	//Add for wifi switch monitor
+	if (bdf_type == CNSS_BDF_REGDB) {
+		set_bit(CNSS_LOAD_REGDB_SUCCESS, &plat_priv->loadRegdbState);
+	} else if (bdf_type == CNSS_BDF_ELF){
+		set_bit(CNSS_LOAD_BDF_SUCCESS, &plat_priv->loadBdfState);
+	}
+	#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
 
 	cnss_pr_dbg("Downloading BDF: %s, size: %u\n", filename, remaining);
 
@@ -909,6 +880,14 @@ int cnss_wlfw_bdf_dnld_send_sync(struct cnss_plat_data *plat_priv,
 err_send:
 	release_firmware(fw_entry);
 err_req_fw:
+	#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+	//Add for wifi switch monitor
+	if (bdf_type == CNSS_BDF_REGDB) {
+		set_bit(CNSS_LOAD_REGDB_FAIL, &plat_priv->loadRegdbState);
+	} else if (bdf_type == CNSS_BDF_ELF){
+		set_bit(CNSS_LOAD_BDF_FAIL, &plat_priv->loadBdfState);
+	}
+	#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
 	if (!(bdf_type == CNSS_BDF_REGDB ||
 	      test_bit(CNSS_IN_REBOOT, &plat_priv->driver_state) ||
 	      ret == -EAGAIN))
@@ -1003,6 +982,11 @@ int cnss_wlfw_wlan_mac_req_send_sync(struct cnss_plat_data *plat_priv,
 	struct qmi_txn txn;
 	int ret;
 
+#ifdef OPLUS_FEATURE_WIFI_MAC
+        int i;
+        char revert_mac[QMI_WLFW_MAC_ADDR_SIZE_V01];
+#endif /* OPLUS_FEATURE_WIFI_MAC */
+
 	if (!plat_priv || !mac || mac_len != QMI_WLFW_MAC_ADDR_SIZE_V01)
 		return -EINVAL;
 
@@ -1017,7 +1001,16 @@ int cnss_wlfw_wlan_mac_req_send_sync(struct cnss_plat_data *plat_priv,
 
 		cnss_pr_dbg("Sending WLAN mac req [%pM], state: 0x%lx\n",
 			    mac, plat_priv->driver_state);
-	memcpy(req.mac_addr, mac, mac_len);
+#ifdef OPLUS_FEATURE_WIFI_MAC
+        for (i = 0; i < QMI_WLFW_MAC_ADDR_SIZE_V01 ; i ++){
+                revert_mac[i] = mac[QMI_WLFW_MAC_ADDR_SIZE_V01 - i -1];
+        }
+                cnss_pr_dbg("Sending revert WLAN mac req [%pM], state: 0x%lx\n",
+                            revert_mac, plat_priv->driver_state);
+        memcpy(req.mac_addr, revert_mac, mac_len);
+#else
+        memcpy(req.mac_addr, mac, mac_len);
+#endif /* OPLUS_FEATURE_WIFI_MAC */
 	req.mac_addr_valid = 1;
 
 	ret = qmi_send_request(&plat_priv->qmi_wlfw, NULL, &txn,
@@ -1530,31 +1523,16 @@ int cnss_wlfw_wlan_cfg_send_sync(struct cnss_plat_data *plat_priv,
 		req->svc_cfg[i].pipe_num = config->ce_svc_cfg[i].pipe_num;
 	}
 
-	if (plat_priv->device_id != KIWI_DEVICE_ID) {
-		req->shadow_reg_v2_valid = 1;
-		if (config->num_shadow_reg_v2_cfg >
-		    QMI_WLFW_MAX_NUM_SHADOW_REG_V2_V01)
-			req->shadow_reg_v2_len = QMI_WLFW_MAX_NUM_SHADOW_REG_V2_V01;
-		else
-			req->shadow_reg_v2_len = config->num_shadow_reg_v2_cfg;
+	req->shadow_reg_v2_valid = 1;
+	if (config->num_shadow_reg_v2_cfg >
+	    QMI_WLFW_MAX_NUM_SHADOW_REG_V2_V01)
+		req->shadow_reg_v2_len = QMI_WLFW_MAX_NUM_SHADOW_REG_V2_V01;
+	else
+		req->shadow_reg_v2_len = config->num_shadow_reg_v2_cfg;
 
-		memcpy(req->shadow_reg_v2, config->shadow_reg_v2_cfg,
-		       sizeof(struct wlfw_shadow_reg_v2_cfg_s_v01)
-		       * req->shadow_reg_v2_len);
-	} else {
-		cnss_pr_dbg("Shadow reg v3 len: %d\n",
-			    config->num_shadow_reg_v3_cfg);
-		req->shadow_reg_v3_valid = 1;
-		if (config->num_shadow_reg_v3_cfg >
-		    MAX_NUM_SHADOW_REG_V3)
-			req->shadow_reg_v3_len = MAX_NUM_SHADOW_REG_V3;
-		else
-			req->shadow_reg_v3_len = config->num_shadow_reg_v3_cfg;
-
-		memcpy(req->shadow_reg_v3, config->shadow_reg_v3_cfg,
-		       sizeof(struct wlfw_shadow_reg_v3_cfg_s_v01)
-		       * req->shadow_reg_v3_len);
-	}
+	memcpy(req->shadow_reg_v2, config->shadow_reg_v2_cfg,
+	       sizeof(struct wlfw_shadow_reg_v2_cfg_s_v01)
+	       * req->shadow_reg_v2_len);
 
 	ret = qmi_txn_init(&plat_priv->qmi_wlfw, &txn,
 			   wlfw_wlan_cfg_resp_msg_v01_ei, resp);
@@ -2687,17 +2665,20 @@ static void cnss_wlfw_respond_get_info_ind_cb(struct qmi_handle *qmi_wlfw,
 	struct cnss_plat_data *plat_priv =
 		container_of(qmi_wlfw, struct cnss_plat_data, qmi_wlfw);
 	const struct wlfw_respond_get_info_ind_msg_v01 *ind_msg = data;
-
+        #ifndef OPLUS_BUG_STABILITY
 	cnss_pr_buf("Received QMI WLFW respond get info indication\n");
+        #endif /*OPLUS_BUG_STABILITY*/
 
 	if (!txn) {
 		cnss_pr_err("Spurious indication\n");
 		return;
 	}
 
+        #ifndef OPLUS_BUG_STABILITY
 	cnss_pr_buf("Extract message with event length: %d, type: %d, is last: %d, seq no: %d\n",
 		    ind_msg->data_len, ind_msg->type,
 		    ind_msg->is_last, ind_msg->seq_no);
+        #endif /*OPLUS_BUG_STABILITY*/
 
 	if (plat_priv->get_info_cb_ctx && plat_priv->get_info_cb)
 		plat_priv->get_info_cb(plat_priv->get_info_cb_ctx,

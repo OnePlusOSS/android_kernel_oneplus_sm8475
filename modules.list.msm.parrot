@@ -1,5 +1,4 @@
 gh_virt_wdt.ko
-qcom-pmu-lib.ko
 qcom_wdt_core.ko
 clk-dummy.ko
 clk-rpmh.ko

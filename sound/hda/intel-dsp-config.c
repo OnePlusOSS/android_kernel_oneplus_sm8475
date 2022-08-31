@@ -30,7 +30,6 @@ struct config_entry {
 	u32 flags;
 	u16 device;
 	const struct dmi_system_id *dmi_table;
-	u8 codec_hid[ACPI_ID_LEN];
 };
 
 /*
@@ -56,7 +55,7 @@ static const struct config_entry config_table[] = {
 /*
  * Apollolake (Broxton-P)
  * the legacy HDAudio driver is used except on Up Squared (SOF) and
- * Chromebooks (SST), as well as devices based on the ES8336 codec
+ * Chromebooks (SST)
  */
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_APOLLOLAKE)
 	{
@@ -72,11 +71,6 @@ static const struct config_entry config_table[] = {
 			},
 			{}
 		}
-	},
-	{
-		.flags = FLAG_SOF,
-		.device = 0x5a98,
-		.codec_hid = "ESSX8336",
 	},
 #endif
 #if IS_ENABLED(CONFIG_SND_SOC_INTEL_APL)
@@ -142,7 +136,7 @@ static const struct config_entry config_table[] = {
 
 /*
  * Geminilake uses legacy HDAudio driver except for Google
- * Chromebooks and devices based on the ES8336 codec
+ * Chromebooks
  */
 /* Geminilake */
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_GEMINILAKE)
@@ -158,11 +152,6 @@ static const struct config_entry config_table[] = {
 			},
 			{}
 		}
-	},
-	{
-		.flags = FLAG_SOF,
-		.device = 0x3198,
-		.codec_hid = "ESSX8336",
 	},
 #endif
 
@@ -251,11 +240,6 @@ static const struct config_entry config_table[] = {
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
 		.device = 0x02c8,
 	},
-	{
-		.flags = FLAG_SOF,
-		.device = 0x02c8,
-		.codec_hid = "ESSX8336",
-	},
 /* Cometlake-H */
 	{
 		.flags = FLAG_SOF,
@@ -280,11 +264,6 @@ static const struct config_entry config_table[] = {
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
 		.device = 0x06c8,
 	},
-		{
-		.flags = FLAG_SOF,
-		.device = 0x06c8,
-		.codec_hid = "ESSX8336",
-	},
 #endif
 
 /* Icelake */
@@ -305,15 +284,6 @@ static const struct config_entry config_table[] = {
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
 		.device = 0x34c8,
-	},
-#endif
-
-/* JasperLake */
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_JASPERLAKE)
-	{
-		.flags = FLAG_SOF,
-		.device = 0x4dc8,
-		.codec_hid = "ESSX8336",
 	},
 #endif
 
@@ -339,11 +309,6 @@ static const struct config_entry config_table[] = {
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
 		.device = 0x43c8,
-	},
-	{
-		.flags = FLAG_SOF,
-		.device = 0xa0c8,
-		.codec_hid = "ESSX8336",
 	},
 #endif
 
@@ -371,8 +336,6 @@ static const struct config_entry *snd_intel_dsp_find_config
 		if (table->device != device)
 			continue;
 		if (table->dmi_table && !dmi_check_system(table->dmi_table))
-			continue;
-		if (table->codec_hid[0] && !acpi_dev_present(table->codec_hid, NULL, -1))
 			continue;
 		return table;
 	}
