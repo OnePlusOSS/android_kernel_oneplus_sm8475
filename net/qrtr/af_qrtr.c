@@ -2,6 +2,7 @@
 /*
  * Copyright (c) 2015, Sony Mobile Communications Inc.
  * Copyright (c) 2013, 2018-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #include <linux/kthread.h>
 #include <linux/module.h>
@@ -20,6 +21,7 @@
 #include <uapi/linux/sched/types.h>
 
 #include "qrtr.h"
+#include "debug.h"
 
 #define QRTR_LOG_PAGE_CNT 4
 #define QRTR_INFO(ctx, x, ...)				\
@@ -184,6 +186,8 @@ struct qrtr_node {
 
 	struct wakeup_source *ws;
 	void *ilc;
+
+	u32 nonwake_svc[MAX_NON_WAKE_SVC_LEN];
 };
 
 struct qrtr_tx_flow_waiter {
@@ -863,7 +867,9 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 	size_t size;
 	unsigned int ver;
 	size_t hdrlen;
-	int errcode;
+	int errcode, i;
+	bool wake = true;
+	int svc_id;
 
 	if (len == 0 || len & 3)
 		return -EINVAL;
@@ -872,6 +878,7 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 	if (!skb) {
 		skb = qrtr_get_backup(len);
 		if (!skb) {
+			qrtr_log_skb_failure(data, len);
 			pr_err("qrtr: Unable to get skb with len:%lu\n", len);
 			return -ENOMEM;
 		}
@@ -944,6 +951,8 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 		qrtr_node_assign(node, le32_to_cpu(pkt->server.node));
 	}
 
+	if (cb->confirm_rx)
+		qrtr_log_resume_tx(cb->src_node, cb->src_port, RTX_SKB_ALLOC_SUCC);
 	qrtr_log_rx_msg(node, skb);
 	/* All control packets and non-local destined data packets should be
 	 * queued to the worker for forwarding handling.
@@ -965,9 +974,22 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 		}
 
 		/* Force wakeup for all packets except for sensors */
-		if (node->nid != 9)
+		if (node->nid != 9 && node->nid != 5)
 			pm_wakeup_ws_event(node->ws, qrtr_wakeup_ms, true);
 
+		if (node->nid == 5) {
+			svc_id = qrtr_get_service_id(cb->src_node, cb->src_port);
+			if (svc_id > 0) {
+				for (i = 0; i < MAX_NON_WAKE_SVC_LEN; i++) {
+					if (svc_id == node->nonwake_svc[i]) {
+						wake = false;
+						break;
+					}
+				}
+			}
+			if (wake)
+				pm_wakeup_ws_event(node->ws, qrtr_wakeup_ms, true);
+		}
 		qrtr_port_put(ipc);
 	}
 
@@ -1166,6 +1188,39 @@ static void qrtr_hello_work(struct kthread_work *work)
 	qrtr_port_put(ctrl);
 }
 
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+#include <linux/of.h>
+static char * qrtr_get_device_node_name(struct qrtr_endpoint *ep)
+{
+	char prefix_str[] = "qrtr_ws";
+	char middle_str[] = "_";
+	const char *node_name;
+	char *target_name = NULL;
+	int  str_len = 0;
+
+	if(ep->dev==NULL) {
+		pr_info("%s %d : ep->dev is null\n", __func__, __LINE__);
+		dump_stack();
+		return NULL;
+	}
+	if(ep->dev->of_node!=NULL) {
+		node_name = kbasename(ep->dev->of_node->full_name);
+	} else if(ep->dev->kobj.name!=NULL) {
+		node_name = ep->dev->kobj.name;
+	} else {
+		return NULL;
+	}
+	str_len = strlen(prefix_str) + strlen(middle_str)  + strlen(node_name);
+	target_name = (char *)kzalloc(str_len+1, GFP_KERNEL);
+	if(!target_name) {
+		pr_info("%s %d : kzalloc fail\n", __func__, __LINE__);
+		return NULL;
+	}
+	snprintf(target_name, str_len, "%s%s%s", prefix_str, middle_str, node_name);
+	return target_name;
+}
+#endif
+
 /**
  * qrtr_endpoint_register() - register a new endpoint
  * @ep: endpoint to register
@@ -1176,10 +1231,13 @@ static void qrtr_hello_work(struct kthread_work *work)
  * The specified endpoint must have the xmit function pointer set on call.
  */
 int qrtr_endpoint_register(struct qrtr_endpoint *ep, unsigned int net_id,
-			   bool rt)
+			   bool rt, u32 *svc_arr)
 {
 	struct qrtr_node *node;
 	struct sched_param param = {.sched_priority = 1};
+	#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	char *dev_name = NULL;
+	#endif
 
 	if (!ep || !ep->xmit)
 		return -EINVAL;
@@ -1207,6 +1265,9 @@ int qrtr_endpoint_register(struct qrtr_endpoint *ep, unsigned int net_id,
 	if (rt)
 		sched_setscheduler(node->task, SCHED_FIFO, &param);
 
+	if (svc_arr)
+		memcpy(node->nonwake_svc, svc_arr, MAX_NON_WAKE_SVC_LEN * sizeof(int));
+
 	mutex_init(&node->qrtr_tx_lock);
 	INIT_RADIX_TREE(&node->qrtr_tx_flow, GFP_KERNEL);
 	init_waitqueue_head(&node->resume_tx);
@@ -1219,7 +1280,16 @@ int qrtr_endpoint_register(struct qrtr_endpoint *ep, unsigned int net_id,
 	up_write(&qrtr_epts_lock);
 	ep->node = node;
 
+	#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	dev_name = qrtr_get_device_node_name(ep);
+	if(!dev_name) {
+		dev_name = "qrtr_ws_unknown";
+	}
+	node->ws = wakeup_source_register(NULL, dev_name);
+	pr_info("%s %d : qrtr wakeup source name is %s\n", __func__, __LINE__, dev_name);
+	#else
 	node->ws = wakeup_source_register(NULL, "qrtr_ws");
+	#endif
 
 	kthread_queue_work(&node->kworker, &node->say_hello);
 	return 0;
@@ -1329,7 +1399,7 @@ void qrtr_endpoint_unregister(struct qrtr_endpoint *ep)
 
 	/* Wake up any transmitters waiting for resume-tx from the node */
 	wake_up_interruptible_all(&node->resume_tx);
-
+	qrtr_log_resume_tx_node_erase(node->nid);
 	qrtr_node_release(node);
 	ep->node = NULL;
 }
@@ -1382,6 +1452,9 @@ static void qrtr_send_del_client(struct qrtr_sock *ipc)
 	pkt->cmd = cpu_to_le32(QRTR_TYPE_DEL_CLIENT);
 	pkt->client.node = cpu_to_le32(ipc->us.sq_node);
 	pkt->client.port = cpu_to_le32(ipc->us.sq_port);
+
+	qrtr_log_resume_tx(pkt->client.node, pkt->client.port,
+			   RTX_REMOVE_RECORD);
 
 	skb_set_owner_w(skb, &ipc->sk);
 
@@ -1788,6 +1861,8 @@ static int qrtr_send_resume_tx(struct qrtr_cb *cb)
 
 	skb = qrtr_alloc_ctrl_packet(&pkt);
 	if (!skb) {
+		qrtr_log_resume_tx(cb->src_node, cb->src_port,
+				   RTX_CTRL_SKB_ALLOC_FAIL);
 		qrtr_node_release(node);
 		return -ENOMEM;
 	}
@@ -1798,7 +1873,7 @@ static int qrtr_send_resume_tx(struct qrtr_cb *cb)
 
 	ret = qrtr_node_enqueue(node, skb, QRTR_TYPE_RESUME_TX,
 				&local, &remote, 0);
-
+	qrtr_log_resume_tx(cb->src_node, cb->src_port, RTX_SENT_ACK);
 	qrtr_node_release(node);
 
 	return ret;
@@ -2081,6 +2156,7 @@ static int __init qrtr_proto_init(void)
 	qrtr_ns_init();
 
 	qrtr_backup_init();
+	qrtr_debug_init();
 
 	return rc;
 }
@@ -2093,6 +2169,7 @@ static void __exit qrtr_proto_fini(void)
 	proto_unregister(&qrtr_proto);
 
 	qrtr_backup_deinit();
+	qrtr_debug_remove();
 }
 module_exit(qrtr_proto_fini);
 

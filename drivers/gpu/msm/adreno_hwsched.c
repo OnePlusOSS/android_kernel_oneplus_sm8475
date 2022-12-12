@@ -1528,7 +1528,9 @@ static void hwsched_lsr_check(struct work_struct *work)
 {
 	struct adreno_hwsched *hwsched = container_of(work,
 		struct adreno_hwsched, lsr_check_ws);
-	struct kgsl_device *device = kgsl_get_device(0);
+	struct adreno_device *adreno_dev = container_of(hwsched,
+		struct adreno_device, hwsched);
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
 	mutex_lock(&device->mutex);
 	kgsl_pwrscale_update_stats(device);
@@ -1581,7 +1583,7 @@ int adreno_hwsched_init(struct adreno_device *adreno_dev,
 
 	sched_set_fifo(hwsched->worker->task);
 
-	sysfs_create_files(&device->dev->kobj, _hwsched_attr_list);
+	WARN_ON(sysfs_create_files(&device->dev->kobj, _hwsched_attr_list));
 	adreno_set_dispatch_ops(adreno_dev, &hwsched_ops);
 	hwsched->hwsched_ops = target_hwsched_ops;
 	init_completion(&hwsched->idle_gate);

@@ -54,9 +54,9 @@
 #define QCE_CLK_DISABLE_FIRST		3
 #define QCE_BW_REQUEST_RESET_FIRST	4
 
-/* interconnect average and peak bw for crypto device */
-#define CRYPTO_AVG_BW			393600
-#define CRYPTO_PEAK_BW			393600
+/* default average and peak bw for crypto device */
+#define CRYPTO_AVG_BW			100100
+#define CRYPTO_PEAK_BW			100100
 
 typedef void (*qce_comp_func_ptr_t)(void *areq,
 		unsigned char *icv, unsigned char *iv, int ret);
@@ -106,6 +106,7 @@ enum qce_req_op_enum {
 
 /* Offload operation type */
 enum qce_offload_op_enum {
+	QCE_OFFLOAD_NONE = 0, /* kernel pipe */
 	QCE_OFFLOAD_HLOS_HLOS = 1,
 	QCE_OFFLOAD_HLOS_CPB = 2,
 	QCE_OFFLOAD_CPB_HLOS = 3,

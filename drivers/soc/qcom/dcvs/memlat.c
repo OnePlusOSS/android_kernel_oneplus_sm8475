@@ -529,6 +529,8 @@ static ssize_t store_spm_thres(struct kobject *kobj,
 	mon->spm_thres = spm_thres;
 	if (mon->spm_thres < MAX_SPM_THRES)
 		mon->enable_spm_voting = 1;
+	else
+		mon->enable_spm_voting = 0;
 	mon->disable_spm_value = mon->spm_thres -
 				mult_frac(mon->spm_thres, mon->spm_drop_pct, 100);
 	return count;
@@ -1649,10 +1651,13 @@ static int memlat_dev_probe(struct platform_device *pdev)
 			ret = qcom_pmu_event_supported(event_id, cpu);
 			if (!ret)
 				continue;
-			if (ret != -EPROBE_DEFER)
+			if (ret != -EPROBE_DEFER) {
 				dev_err(dev, "ev=%lu not found on cpu%d: %d\n",
 						event_id, cpu, ret);
-			return ret;
+				if (event_id == INST_EV || event_id == CYC_EV)
+					return ret;
+			} else
+				return ret;
 		}
 	}
 

@@ -2603,12 +2603,14 @@
   __traceiter_ipi_entry
   __traceiter_ipi_raise
   __traceiter_irq_handler_entry
+  __traceiter_map
   __traceiter_rwmmio_post_read
   __traceiter_rwmmio_read
   __traceiter_rwmmio_write
   __traceiter_sched_overutilized_tp
   __traceiter_sched_switch
   __traceiter_suspend_resume
+  __traceiter_unmap
   __tracepoint_android_rvh_account_irq
   __tracepoint_android_rvh_after_dequeue_task
   __tracepoint_android_rvh_after_enqueue_task
@@ -2727,6 +2729,7 @@
   __tracepoint_ipi_entry
   __tracepoint_ipi_raise
   __tracepoint_irq_handler_entry
+  __tracepoint_map
   tracepoint_probe_register
   tracepoint_probe_register_prio
   tracepoint_probe_unregister
@@ -2736,6 +2739,7 @@
   __tracepoint_sched_overutilized_tp
   __tracepoint_sched_switch
   __tracepoint_suspend_resume
+  __tracepoint_unmap
   trace_print_array_seq
   trace_print_flags_seq
   trace_print_hex_seq
@@ -3052,3 +3056,25 @@
   xhci_trb_virt_to_dma
   zone_watermark_ok
   zone_watermark_ok_safe
+__hid_register_driver
+__hid_request
+filp_close
+filp_open
+hid_hw_start
+hid_open_report
+hid_unregister_driver
+i2c_smbus_read_byte_data
+i2c_smbus_read_i2c_block_data
+i2c_smbus_read_word_data
+i2c_smbus_write_byte_data
+i2c_smbus_write_i2c_block_data
+i2c_smbus_write_word_data
+iio_channel_get
+input_ff_create_memless
+rtc_class_close
+rtc_class_open
+rtc_read_time
+rtc_valid_tm
+simple_strtoul
+stpcpy
+#endif
