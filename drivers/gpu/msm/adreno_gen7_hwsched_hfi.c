@@ -916,6 +916,7 @@ poll:
 static void reset_hfi_queues(struct adreno_device *adreno_dev)
 {
 	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct hfi_queue_table *tbl = gmu->hfi.hfi_mem->hostptr;
 	u32 i;
 
@@ -927,12 +928,15 @@ static void reset_hfi_queues(struct adreno_device *adreno_dev)
 			continue;
 
 		if (hdr->read_index != hdr->write_index) {
-			dev_err(&gmu->pdev->dev,
-			"HFI queue[%d] is not empty before close: rd=%d,wt=%d\n",
-				i, hdr->read_index, hdr->write_index);
-			hdr->read_index = hdr->write_index;
+			/* Don't capture snapshot again in reset path */
+			if (!device->snapshot || device->snapshot->recovered) {
+				dev_err(&gmu->pdev->dev,
+				"HFI queue[%d] is not empty before close: rd=%d,wt=%d\n",
+					i, hdr->read_index, hdr->write_index);
 
-			gmu_core_fault_snapshot(KGSL_DEVICE(adreno_dev));
+				gmu_core_fault_snapshot(device);
+			}
+			hdr->read_index = hdr->write_index;
 		}
 	}
 }
@@ -994,6 +998,21 @@ static int enable_preemption(struct adreno_device *adreno_dev)
 
 }
 
+static int gen7_hfi_send_perfcounter_feature_ctrl(struct adreno_device *adreno_dev)
+{
+	/*
+	 * Perfcounter retention is disabled by default in GMU firmware.
+	 * In case perfcounter retention behavior is overwritten by sysfs
+	 * setting dynamically, send this HFI feature with 'enable = 0' to
+	 * disable this feature in GMU firmware.
+	 */
+	if (adreno_dev->perfcounter)
+		return gen7_hfi_send_feature_ctrl(adreno_dev,
+				HFI_FEATURE_PERF_NORETAIN, 0, 0);
+
+	return 0;
+}
+
 int gen7_hwsched_hfi_start(struct adreno_device *adreno_dev)
 {
 	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
@@ -1038,6 +1057,10 @@ int gen7_hwsched_hfi_start(struct adreno_device *adreno_dev)
 		if (ret)
 			goto err;
 	}
+
+	ret = gen7_hfi_send_perfcounter_feature_ctrl(adreno_dev);
+	if (ret)
+		goto err;
 
 	/* Enable the long ib timeout detection */
 	if (adreno_long_ib_detect(adreno_dev)) {
@@ -1182,10 +1205,10 @@ static int hfi_f2h_main(void *arg)
 	struct gen7_hwsched_hfi *hfi = to_gen7_hwsched_hfi(adreno_dev);
 
 	while (!kthread_should_stop()) {
-		wait_event_interruptible(hfi->f2h_wq, !kthread_should_stop() &&
-			!(is_queue_empty(adreno_dev, HFI_MSG_ID) &&
+		wait_event_interruptible(hfi->f2h_wq, kthread_should_stop() ||
+			(!(is_queue_empty(adreno_dev, HFI_MSG_ID) &&
 			is_queue_empty(adreno_dev, HFI_DBG_ID)) &&
-			(hfi->irq_mask & HFI_IRQ_MSGQ_MASK));
+			(hfi->irq_mask & HFI_IRQ_MSGQ_MASK)));
 
 		if (kthread_should_stop())
 			break;
@@ -1223,7 +1246,8 @@ void gen7_hwsched_hfi_remove(struct adreno_device *adreno_dev)
 {
 	struct gen7_hwsched_hfi *hw_hfi = to_gen7_hwsched_hfi(adreno_dev);
 
-	kthread_stop(hw_hfi->f2h_task);
+	if (hw_hfi->f2h_task)
+		kthread_stop(hw_hfi->f2h_task);
 }
 
 static void add_profile_events(struct adreno_device *adreno_dev,

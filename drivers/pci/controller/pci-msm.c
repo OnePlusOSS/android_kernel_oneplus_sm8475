@@ -35,6 +35,7 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <soc/qcom/subsystem_notif.h>
+#include <linux/clk/qcom.h>
 
 #include "../pci.h"
 
@@ -108,6 +109,7 @@
 #define PCIE20_CAP (0x70)
 #define PCIE20_CAP_DEVCTRLSTATUS (PCIE20_CAP + 0x08)
 #define PCIE20_CAP_LINKCTRLSTATUS (PCIE20_CAP + 0x10)
+#define PCIE20_CAP_ROOT_CAPABILITIES_REG (PCIE20_CAP + 0x1C)
 #define PCIE_CAP_DLL_ACTIVE BIT(29)
 
 #define PCIE20_COMMAND_STATUS (0x04)
@@ -206,8 +208,8 @@
 #define MAX_PROP_SIZE (32)
 #define MAX_RC_NAME_LEN (15)
 #define MSM_PCIE_MAX_VREG (6)
-#define MSM_PCIE_MAX_CLK (20)
-#define MSM_PCIE_MAX_PIPE_CLK (1)
+#define MSM_PCIE_MAX_CLK (23)
+#define MSM_PCIE_MAX_PIPE_CLK (2)
 #define MAX_RC_NUM (3)
 #define MAX_DEVICE_NUM (20)
 #define PCIE_TLP_RD_SIZE (0x5)
@@ -292,7 +294,6 @@
 		ipc_log_string((dev)->ipc_log, "%s: " fmt, __func__, ##arg); \
 	pr_err("%s: " fmt, __func__, arg);  \
 	} while (0)
-
 
 enum msm_pcie_res {
 	MSM_PCIE_RES_PARF,
@@ -463,6 +464,7 @@ enum msm_pcie_debugfs_option {
 	MSM_PCIE_DISABLE_L1SS,
 	MSM_PCIE_ENABLE_L1SS,
 	MSM_PCIE_ENUMERATION,
+	MSM_PCIE_DEENUMERATION,
 	MSM_PCIE_READ_PCIE_REGISTER,
 	MSM_PCIE_WRITE_PCIE_REGISTER,
 	MSM_PCIE_DUMP_PCIE_REGISTER_SPACE,
@@ -491,6 +493,7 @@ static const char * const
 	"DISABLE L1SS",
 	"ENABLE L1SS",
 	"ENUMERATE",
+	"DE-ENUMERATE",
 	"READ A PCIE REGISTER",
 	"WRITE TO PCIE REGISTER",
 	"DUMP PCIE REGISTER SPACE",
@@ -701,7 +704,7 @@ struct msm_pcie_dev_t {
 
 	enum msm_pcie_link_status link_status;
 	bool user_suspend;
-	bool disable_pc;
+	uint32_t disable_pc;
 
 	struct pci_saved_state *default_state;
 	struct pci_saved_state *saved_state;
@@ -819,6 +822,7 @@ struct msm_pcie_dev_t {
 
 	u32 dbi_debug_reg_len;
 	u32 *dbi_debug_reg;
+	struct pci_host_bridge *bridge;
 };
 
 struct msm_root_dev_t {
@@ -942,7 +946,10 @@ static struct msm_pcie_clk_info_t
 	{NULL, "pcie_pipe_clk_mux", 0, false, false},
 	{NULL, "pcie_pipe_clk_ext_src", 0, false, false},
 	{NULL, "pcie_phy_aux_clk_mux", 0, false, false},
-	{NULL, "pcie_phy_aux_clk_ext_src", 0, false, false}
+	{NULL, "pcie_phy_aux_clk_ext_src", 0, false, false},
+	{NULL, "pcie_aggre_noc_sf_axi_clk", 0, false, false},
+	{NULL, "pcie_cfg_noc_pcie_anoc_ahb_clk", 0, false, false},
+	{NULL, "pcie_qmip_pcie_ahb_clk", 0, false, false},
 	},
 	{
 	{NULL, "pcie_1_ref_clk_src", 0, false, false},
@@ -964,7 +971,10 @@ static struct msm_pcie_clk_info_t
 	{NULL, "pcie_pipe_clk_mux", 0, false, false},
 	{NULL, "pcie_pipe_clk_ext_src", 0, false, false},
 	{NULL, "pcie_phy_aux_clk_mux", 0, false, false},
-	{NULL, "pcie_phy_aux_clk_ext_src", 0, false, false}
+	{NULL, "pcie_phy_aux_clk_ext_src", 0, false, false},
+	{NULL, "pcie_aggre_noc_sf_axi_clk", 0, false, false},
+	{NULL, "pcie_cfg_noc_pcie_anoc_ahb_clk", 0, false, false},
+	{NULL, "pcie_qmip_pcie_ahb_clk", 0, false, false},
 	},
 	{
 	{NULL, "pcie_2_ref_clk_src", 0, false, false},
@@ -986,7 +996,10 @@ static struct msm_pcie_clk_info_t
 	{NULL, "pcie_pipe_clk_mux", 0, false, false},
 	{NULL, "pcie_pipe_clk_ext_src", 0, false, false},
 	{NULL, "pcie_phy_aux_clk_mux", 0, false, false},
-	{NULL, "pcie_phy_aux_clk_ext_src", 0, false, false}
+	{NULL, "pcie_phy_aux_clk_ext_src", 0, false, false},
+	{NULL, "pcie_aggre_noc_pcie_sf_axi_clk", 0, false, false},
+	{NULL, "pcie_cfg_noc_pcie_anoc_ahb_clk", 0, false, false},
+	{NULL, "pcie_qmip_pcie_ahb_clk", 0, false, false},
 	}
 };
 
@@ -995,12 +1008,15 @@ static struct msm_pcie_clk_info_t
 	msm_pcie_pipe_clk_info[MAX_RC_NUM][MSM_PCIE_MAX_PIPE_CLK] = {
 	{
 	{NULL, "pcie_0_pipe_clk", 125000000, true, false},
+	{NULL, "pcie_0_pipe_div2_clk", 0, false, false},
 	},
 	{
 	{NULL, "pcie_1_pipe_clk", 125000000, true, false},
+	{NULL, "pcie_1_pipe_div2_clk", 0, false, false},
 	},
 	{
 	{NULL, "pcie_2_pipe_clk", 125000000, true, false},
+	{NULL, "pcie_2_pipe_div2_clk", 0, false, false},
 	}
 };
 
@@ -1198,6 +1214,9 @@ static void msm_pcie_rumi_init(struct msm_pcie_dev_t *pcie_dev)
 	u32 phy_ctrl_offs = 0x40;
 
 	PCIE_DBG(pcie_dev, "PCIe: RC%d: enter.\n", pcie_dev->rc_idx);
+
+	/* configure PCIe to RC mode */
+	msm_pcie_write_reg(pcie_dev->rumi, 0x54, 0x7c70);
 
 	val = readl_relaxed(pcie_dev->rumi + phy_ctrl_offs) | 0x1000;
 	msm_pcie_write_reg(pcie_dev->rumi, phy_ctrl_offs, val);
@@ -1613,6 +1632,23 @@ static void msm_pcie_sel_debug_testcase(struct msm_pcie_dev_t *dev,
 			else
 				PCIE_DBG_FS(dev,
 					"PCIe: RC%d enumeration failed\n",
+					dev->rc_idx);
+		}
+		break;
+	case MSM_PCIE_DEENUMERATION:
+		PCIE_DBG_FS(dev, "\n\nPCIe: attempting to de enumerate RC%d\n\n",
+			dev->rc_idx);
+		if (!dev->enumerated)
+			PCIE_DBG_FS(dev, "PCIe: RC%d is already de enumerated\n",
+				dev->rc_idx);
+		else {
+			if (!msm_pcie_deenumerate(dev->rc_idx))
+				PCIE_DBG_FS(dev,
+					"PCIe: RC%d is successfully de enumerated\n",
+					dev->rc_idx);
+			else
+				PCIE_DBG_FS(dev,
+					"PCIe: RC%d de enumeration failed\n",
 					dev->rc_idx);
 		}
 		break;
@@ -2638,6 +2674,28 @@ static bool msm_pcie_check_ltssm_state(struct msm_pcie_dev_t *dev, u32 state)
 	return false;
 }
 
+void msm_pcie_clk_dump(struct msm_pcie_dev_t *pcie_dev)
+{
+	struct msm_pcie_clk_info_t *clk_info;
+	int i;
+
+	PCIE_ERR(pcie_dev,
+		 "PCIe: RC%d: Dump PCIe clocks\n",
+		 pcie_dev->rc_idx);
+
+	clk_info = pcie_dev->clk;
+	for (i = 0; i < MSM_PCIE_MAX_CLK; i++, clk_info++) {
+		if (clk_info->hdl)
+			qcom_clk_dump(clk_info->hdl, NULL, 0);
+	}
+
+	clk_info = pcie_dev->pipeclk;
+	for (i = 0; i < MSM_PCIE_MAX_PIPE_CLK; i++, clk_info++) {
+		if (clk_info->hdl)
+			qcom_clk_dump(clk_info->hdl, NULL, 0);
+	}
+}
+
 /**
  * msm_pcie_iatu_config - configure outbound address translation region
  * @dev: root commpex
@@ -3463,6 +3521,9 @@ static void msm_pcie_config_controller(struct msm_pcie_dev_t *dev)
 
 		PCIE_DBG(dev, "RC's PCIE20_CAP_DEVCTRLSTATUS:0x%x\n",
 			readl_relaxed(dev->dm_core + PCIE20_CAP_DEVCTRLSTATUS));
+
+		msm_pcie_write_mask(dev->dm_core +  PCIE20_CAP_ROOT_CAPABILITIES_REG, 0,
+						BIT(2)|BIT(1)|BIT(0));
 	}
 }
 
@@ -4651,6 +4712,8 @@ int msm_pcie_enumerate(u32 rc_idx)
 		goto out;
 	}
 
+	dev->cfg_access = true;
+
 	/* kick start ARM PCI configuration framework */
 	ids = readl_relaxed(dev->dm_core);
 	vendor_id = ids & 0xffff;
@@ -4659,16 +4722,26 @@ int msm_pcie_enumerate(u32 rc_idx)
 	PCIE_DBG(dev, "PCIe: RC%d: vendor-id:0x%x device_id:0x%x\n",
 		dev->rc_idx, vendor_id, device_id);
 
-	bridge = devm_pci_alloc_host_bridge(&dev->pdev->dev, sizeof(*dev));
-	if (!bridge) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	if (!dev->bridge) {
+		bridge = devm_pci_alloc_host_bridge(&dev->pdev->dev, sizeof(*dev));
+		if (!bridge) {
 
-	if (!dev->lpi_enable) {
-		ret = msm_msi_init(&dev->pdev->dev);
-		if (ret)
+			PCIE_ERR(dev, "PCIe: RC%d: bridge allocation failed\n", dev->rc_idx);
+			ret = -ENOMEM;
 			goto out;
+		}
+
+		dev->bridge = bridge;
+
+		if (!dev->lpi_enable) {
+			ret = msm_msi_init(&dev->pdev->dev);
+			if (ret)
+				goto out;
+		}
+	} else {
+		bridge = dev->bridge;
+		msm_msi_config_access(dev_get_msi_domain(&dev->dev->dev),
+			true);
 	}
 
 	bridge->sysdata = dev;
@@ -4715,6 +4788,48 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL(msm_pcie_enumerate);
+
+int msm_pcie_deenumerate(u32 rc_idx)
+{
+	struct msm_pcie_dev_t *dev = &msm_pcie_dev[rc_idx];
+	struct pci_host_bridge *bridge = dev->bridge;
+
+	mutex_lock(&dev->enumerate_lock);
+
+	PCIE_DBG(dev, "RC%d: Entry\n", dev->rc_idx);
+
+	if (!dev->enumerated) {
+		PCIE_DBG(dev, "RC%d:device is not enumerated\n", dev->rc_idx);
+		mutex_unlock(&dev->enumerate_lock);
+		return 0;
+	}
+
+	if (dev->config_recovery) {
+		PCIE_DBG(dev, "RC%d: cancel link_recover_wq\n", dev->rc_idx);
+		cancel_work_sync(&dev->link_recover_wq);
+	}
+
+	spin_lock_irqsave(&dev->cfg_lock, dev->irqsave_flags);
+	dev->cfg_access = false;
+	spin_unlock_irqrestore(&dev->cfg_lock, dev->irqsave_flags);
+
+	pci_stop_root_bus(bridge->bus);
+	pci_remove_root_bus(bridge->bus);
+
+	/* Mask all the interrupts */
+	msm_pcie_write_reg(dev->parf, PCIE20_PARF_INT_ALL_MASK, 0);
+
+	msm_pcie_disable(dev);
+
+	dev->enumerated = false;
+
+	mutex_unlock(&dev->enumerate_lock);
+
+	PCIE_DBG(dev, "RC%d: exit\n", dev->rc_idx);
+	return 0;
+
+}
+EXPORT_SYMBOL(msm_pcie_deenumerate);
 
 static void msm_pcie_notify_client(struct msm_pcie_dev_t *dev,
 					enum msm_pcie_event event)
@@ -4837,6 +4952,7 @@ static irqreturn_t handle_aer_irq(int irq, void *data)
 			dev->link_status == MSM_PCIE_LINK_ENABLED) {
 			/* Print the dumps only once */
 			dev->aer_dump = true;
+			msm_pcie_clk_dump(dev);
 			pcie_parf_dump(dev);
 			pcie_dm_core_dump(dev);
 			pcie_phy_dump(dev);
@@ -4974,6 +5090,7 @@ static irqreturn_t handle_wake_irq(int irq, void *data)
 
 		if (dev->drv_supported && !dev->suspending &&
 		    dev->link_status == MSM_PCIE_LINK_ENABLED) {
+			msm_pcie_clk_dump(dev);
 			pcie_phy_dump(dev);
 			pcie_parf_dump(dev);
 			pcie_dm_core_dump(dev);
@@ -4999,6 +5116,7 @@ static void msm_pcie_handle_linkdown(struct msm_pcie_dev_t *dev)
 		PCIE_DUMP(dev,
 			"PCIe:Linkdown IRQ for RC%d Dumping PCIe registers\n",
 			dev->rc_idx);
+		msm_pcie_clk_dump(dev);
 		pcie_phy_dump(dev);
 		pcie_parf_dump(dev);
 		pcie_dm_core_dump(dev);
@@ -6295,6 +6413,7 @@ int msm_pcie_prevent_l1(struct pci_dev *pci_dev)
 			PCIE_ERR(pcie_dev,
 				"PCIe: RC%d: dump PCIe registers\n",
 				pcie_dev->rc_idx);
+			msm_pcie_clk_dump(pcie_dev);
 			pcie_parf_dump(pcie_dev);
 			pcie_dm_core_dump(pcie_dev);
 			pcie_phy_dump(pcie_dev);
@@ -7681,8 +7800,8 @@ int msm_pcie_pm_control(enum msm_pcie_pm_opt pm_opt, u32 busnr, void *user,
 		break;
 	case MSM_PCIE_DISABLE_PC:
 		PCIE_DBG(pcie_dev,
-			 "User of RC%d requests to keep the link always alive.\n",
-			 pcie_dev->rc_idx);
+			 "User of RC%d with vendor_id:0x%x device_id:0x%x requests to keep the link always alive.\n",
+			 pcie_dev->rc_idx, pcidev->vendor, pcidev->device);
 		spin_lock_irqsave(&pcie_dev->cfg_lock, pcie_dev->irqsave_flags);
 		if (pcie_dev->suspending) {
 			PCIE_ERR(pcie_dev,
@@ -7690,17 +7809,20 @@ int msm_pcie_pm_control(enum msm_pcie_pm_opt pm_opt, u32 busnr, void *user,
 				 pcie_dev->rc_idx);
 			ret = MSM_PCIE_ERROR;
 		} else {
-			pcie_dev->disable_pc = true;
+			pcie_dev->disable_pc++;
 		}
 		spin_unlock_irqrestore(&pcie_dev->cfg_lock,
 				       pcie_dev->irqsave_flags);
 		break;
 	case MSM_PCIE_ENABLE_PC:
 		PCIE_DBG(pcie_dev,
-			 "User of RC%d cancels the request of alive link.\n",
-			 pcie_dev->rc_idx);
+			 "User of RC%d with vendor_id:0x%x device_id:0x%x cancels the request of alive link.\n",
+			 pcie_dev->rc_idx, pcidev->vendor, pcidev->device);
 		spin_lock_irqsave(&pcie_dev->cfg_lock, pcie_dev->irqsave_flags);
-		pcie_dev->disable_pc = false;
+		if (pcie_dev->disable_pc > 0)
+			pcie_dev->disable_pc--;
+		else
+			PCIE_ERR(pcie_dev, "PCIe:RC%d cannot call ENABLE_PC", pcie_dev->rc_idx);
 		spin_unlock_irqrestore(&pcie_dev->cfg_lock,
 				       pcie_dev->irqsave_flags);
 		break;

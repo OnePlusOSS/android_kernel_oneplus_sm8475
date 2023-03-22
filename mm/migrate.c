@@ -54,6 +54,8 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/migrate.h>
+#undef CREATE_TRACE_POINTS
+#include <trace/hooks/mm.h>
 
 #include "internal.h"
 
@@ -311,6 +313,7 @@ void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
 	if (!get_page_unless_zero(page))
 		goto out;
 	pte_unmap_unlock(ptep, ptl);
+	trace_android_vh_waiting_for_page_migration(page);
 	put_and_wait_on_page_locked(page);
 	return;
 out:
@@ -583,6 +586,8 @@ static void copy_huge_page(struct page *dst, struct page *src)
 void migrate_page_states(struct page *newpage, struct page *page)
 {
 	int cpupid;
+
+	trace_android_vh_migrate_page_states(page, newpage);
 
 	if (PageError(page))
 		SetPageError(newpage);
@@ -985,9 +990,12 @@ static int move_to_new_page(struct page *newpage, struct page *page,
 		if (!PageMappingFlags(page))
 			page->mapping = NULL;
 
-		if (likely(!is_zone_device_page(newpage)))
-			flush_dcache_page(newpage);
+		if (likely(!is_zone_device_page(newpage))) {
+			int i, nr = compound_nr(newpage);
 
+			for (i = 0; i < nr; i++)
+				flush_dcache_page(newpage + i);
+		}
 	}
 out:
 	return rc;

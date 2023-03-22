@@ -230,13 +230,13 @@ void kgsl_pwrctrl_pwrlevel_change(struct kgsl_device *device,
 	if (pwr->bus_mod < 0 || new_level < old_level) {
 		pwr->bus_mod = 0;
 		pwr->bus_percent_ab = 0;
-		pwr->ddr_stall_percent = 0;
 	}
 	/*
 	 * Update the bus before the GPU clock to prevent underrun during
 	 * frequency increases.
 	 */
-	kgsl_bus_update(device, KGSL_BUS_VOTE_ON);
+	if (new_level < old_level)
+		kgsl_bus_update(device, KGSL_BUS_VOTE_ON);
 
 	pwrlevel = &pwr->pwrlevels[pwr->active_pwrlevel];
 	/* Change register settings if any  BEFORE pwrlevel change*/
@@ -250,6 +250,10 @@ void kgsl_pwrctrl_pwrlevel_change(struct kgsl_device *device,
 			pwr->pwrlevels[old_level].gpu_freq);
 
 	trace_gpu_frequency(pwrlevel->gpu_freq/1000, 0);
+
+	/*  Update the bus after GPU clock decreases. */
+	if (new_level > old_level)
+		kgsl_bus_update(device, KGSL_BUS_VOTE_ON);
 
 	/*
 	 * Some targets do not support the bandwidth requirement of
@@ -1394,11 +1398,15 @@ void kgsl_pwrctrl_irq(struct kgsl_device *device, bool state)
 			&pwr->power_flags)) {
 			trace_kgsl_irq(device, state);
 			enable_irq(pwr->interrupt_num);
+			if (device->freq_limiter_intr_num > 0)
+				enable_irq(device->freq_limiter_intr_num);
 		}
 	} else {
 		if (test_and_clear_bit(KGSL_PWRFLAGS_IRQ_ON,
 			&pwr->power_flags)) {
 			trace_kgsl_irq(device, state);
+			if (device->freq_limiter_intr_num > 0)
+				disable_irq(device->freq_limiter_intr_num);
 			if (in_interrupt())
 				disable_irq_nosync(pwr->interrupt_num);
 			else
@@ -1561,8 +1569,6 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 	/* Initialize the thermal clock constraints */
 	pwr->thermal_pwrlevel = 0;
 	pwr->thermal_pwrlevel_floor = pwr->num_pwrlevels - 1;
-
-	pwr->wakeup_maxpwrlevel = 0;
 
 	result = dev_pm_qos_add_request(&pdev->dev, &pwr->sysfs_thermal_req,
 			DEV_PM_QOS_MAX_FREQUENCY,
@@ -1750,12 +1756,7 @@ static int kgsl_pwrctrl_enable(struct kgsl_device *device)
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	int level, status;
 
-	if (pwr->wakeup_maxpwrlevel) {
-		level = pwr->max_pwrlevel;
-		pwr->wakeup_maxpwrlevel = 0;
-	} else {
-		level = pwr->default_pwrlevel;
-	}
+	level = pwr->default_pwrlevel;
 
 	kgsl_pwrctrl_pwrlevel_change(device, level);
 

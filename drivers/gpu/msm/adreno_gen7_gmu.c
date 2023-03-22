@@ -165,6 +165,7 @@ void gen7_load_rsc_ucode(struct adreno_device *adreno_dev)
 {
 	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
 	void __iomem *rscc = gmu->rscc_virt;
+	unsigned int seq_offset = GEN7_RSCC_SEQ_MEM_0_DRV0;
 
 	/* Disable SDE clock gating */
 	_regwrite(rscc, GEN7_GPU_RSCC_RSC_STATUS0_DRV0, BIT(24));
@@ -183,12 +184,15 @@ void gen7_load_rsc_ucode(struct adreno_device *adreno_dev)
 	_regwrite(rscc, GEN7_RSCC_PDC_MATCH_VALUE_LO, 0x4510);
 	_regwrite(rscc, GEN7_RSCC_PDC_MATCH_VALUE_HI, 0x4514);
 
+	if (adreno_is_gen7_6_0(adreno_dev))
+		seq_offset = GEN7_6_0_RSCC_SEQ_MEM_0_DRV0;
+
 	/* Load RSC sequencer uCode for sleep and wakeup */
-	_regwrite(rscc, GEN7_RSCC_SEQ_MEM_0_DRV0, 0xeaaae5a0);
-	_regwrite(rscc, GEN7_RSCC_SEQ_MEM_0_DRV0 + 1, 0xe1a1ebab);
-	_regwrite(rscc, GEN7_RSCC_SEQ_MEM_0_DRV0 + 2, 0xa2e0a581);
-	_regwrite(rscc, GEN7_RSCC_SEQ_MEM_0_DRV0 + 3, 0xecac82e2);
-	_regwrite(rscc, GEN7_RSCC_SEQ_MEM_0_DRV0 + 4, 0x0020edad);
+	_regwrite(rscc, seq_offset, 0xeaaae5a0);
+	_regwrite(rscc, seq_offset + 1, 0xe1a1ebab);
+	_regwrite(rscc, seq_offset + 2, 0xa2e0a581);
+	_regwrite(rscc, seq_offset + 3, 0xecac82e2);
+	_regwrite(rscc, seq_offset + 4, 0x0020edad);
 }
 
 int gen7_load_pdc_ucode(struct adreno_device *adreno_dev)
@@ -266,6 +270,7 @@ int gen7_gmu_enable_gdsc(struct adreno_device *adreno_dev)
 		dev_err(&gmu->pdev->dev,
 			"Failed to enable GMU CX gdsc, error %d\n", ret);
 
+	clear_bit(GMU_PRIV_CX_GDSC_WAIT, &gmu->flags);
 	return ret;
 }
 
@@ -274,6 +279,7 @@ void gen7_gmu_disable_gdsc(struct adreno_device *adreno_dev)
 	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
 
 	reinit_completion(&gmu->gdsc_gate);
+	set_bit(GMU_PRIV_CX_GDSC_WAIT, &gmu->flags);
 	regulator_disable(gmu->cx_gdsc);
 }
 
@@ -635,16 +641,28 @@ static int gen7_gmu_hfi_start_msg(struct adreno_device *adreno_dev)
 static int gen7_complete_rpmh_votes(struct gen7_gmu_device *gmu,
 		u32 timeout)
 {
+	struct adreno_device *adreno_dev = gen7_gmu_to_adreno(gmu);
 	int ret = 0;
 
-	ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS0_DRV0_STATUS,
-			BIT(0), timeout, BIT(0));
-	ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS1_DRV0_STATUS,
-			BIT(0), timeout, BIT(0));
-	ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS2_DRV0_STATUS,
-			BIT(0), timeout, BIT(0));
-	ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS3_DRV0_STATUS,
-			BIT(0), timeout, BIT(0));
+	if (adreno_is_gen7_6_0(adreno_dev)) {
+		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_6_0_RSCC_TCS0_DRV0_STATUS,
+				BIT(0), timeout, BIT(0));
+		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_6_0_RSCC_TCS1_DRV0_STATUS,
+				BIT(0), timeout, BIT(0));
+		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_6_0_RSCC_TCS2_DRV0_STATUS,
+				BIT(0), timeout, BIT(0));
+		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_6_0_RSCC_TCS3_DRV0_STATUS,
+				BIT(0), timeout, BIT(0));
+	} else {
+		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS0_DRV0_STATUS,
+				BIT(0), timeout, BIT(0));
+		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS1_DRV0_STATUS,
+				BIT(0), timeout, BIT(0));
+		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS2_DRV0_STATUS,
+				BIT(0), timeout, BIT(0));
+		ret |= gen7_timed_poll_check_rscc(gmu, GEN7_RSCC_TCS3_DRV0_STATUS,
+				BIT(0), timeout, BIT(0));
+	}
 
 	if (ret)
 		dev_err(&gmu->pdev->dev, "RPMH votes timedout: %d\n", ret);
@@ -833,6 +851,10 @@ void gen7_gmu_register_config(struct adreno_device *adreno_dev)
 	gmu_core_regwrite(device, GEN7_GPU_GMU_CX_GMU_CX_FALNEXT_INTF, 0x1);
 	gmu_core_regwrite(device, GEN7_GPU_GMU_CX_GMU_CX_FAL_INTF, 0x1);
 
+	/* Program GMU QOS control to avoid bandwidth starvation */
+	if (adreno_is_gen7_6_0(adreno_dev))
+		gmu_core_regwrite(device, GEN7_GMU_CX_MRC_GBIF_QOS_CTRL, 0x33);
+
 	/* Turn on TCM retention */
 	adreno_cx_misc_regwrite(adreno_dev, GEN7_GPU_CX_MISC_TCM_RET_CNTL, 1);
 
@@ -868,6 +890,8 @@ void gen7_gmu_register_config(struct adreno_device *adreno_dev)
 
 	/* Pass chipid to GMU FW, must happen before starting GMU */
 	gmu_core_regwrite(device, GEN7_GMU_GENERAL_10,
+			adreno_is_gen7_6_0(adreno_dev) ?
+			ADRENO_GMU_REV(ADRENO_GPUREV(adreno_dev)) :
 			ADRENO_GMU_CHIPID(adreno_dev->chipid));
 
 	/* Log size is encoded in (number of 4K units - 1) */
@@ -1042,9 +1066,9 @@ int gen7_gmu_parse_fw(struct adreno_device *adreno_dev)
 	}
 
 	/*
-	 * Zero payload fw blocks contain meta data and are
+	 * Zero payload fw blocks contain metadata and are
 	 * guaranteed to precede fw load data. Parse the
-	 * meta data blocks.
+	 * metadata blocks.
 	 */
 	while (offset < gmu->fw_image->size) {
 		blk = (struct gmu_block_header *)&gmu->fw_image->data[offset];
@@ -1510,23 +1534,6 @@ static irqreturn_t gen7_gmu_irq_handler(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-void gen7_gmu_snapshot(struct adreno_device *adreno_dev,
-	struct kgsl_snapshot *snapshot)
-{
-	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-
-	/* Send nmi only if it was a gmu fault */
-	if (device->gmu_fault)
-		gen7_gmu_send_nmi(adreno_dev, false);
-
-	gen7_gmu_device_snapshot(device, snapshot);
-
-	gen7_snapshot(adreno_dev, snapshot);
-
-	gmu_core_regwrite(device, GEN7_GMU_GMU2HOST_INTR_CLR, UINT_MAX);
-	gmu_core_regwrite(device, GEN7_GMU_GMU2HOST_INTR_MASK, HFI_IRQ_MASK);
-}
-
 void gen7_gmu_aop_send_acd_state(struct gen7_gmu_device *gmu, bool flag)
 {
 	struct qmp_pkt msg;
@@ -1645,9 +1652,6 @@ static int gen7_gmu_first_boot(struct adreno_device *adreno_dev)
 	icc_set_bw(pwr->icc_path, 0, 0);
 
 	device->gmu_fault = false;
-
-	if (ADRENO_FEATURE(adreno_dev, ADRENO_BCL))
-		adreno_dev->bcl_enabled = true;
 
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_AWARE);
 
@@ -1996,13 +2000,15 @@ static int gmu_cx_gdsc_event(struct notifier_block *nb,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	u32 val;
 
-	if (!(event & REGULATOR_EVENT_DISABLE))
+	if (!(event & REGULATOR_EVENT_DISABLE) ||
+		!test_bit(GMU_PRIV_CX_GDSC_WAIT, &gmu->flags))
 		return 0;
 
 	if (kgsl_regmap_read_poll_timeout(&device->regmap, GEN7_GPU_CC_CX_GDSCR,
 		val, !(val & BIT(31)), 100, 100 * 1000))
 		dev_err(device->dev, "GPU CX wait timeout.\n");
 
+	clear_bit(GMU_PRIV_CX_GDSC_WAIT, &gmu->flags);
 	complete_all(&gmu->gdsc_gate);
 
 	return 0;
@@ -2027,6 +2033,9 @@ static int gen7_gmu_regulators_probe(struct gen7_gmu_device *gmu,
 		return PTR_ERR(gmu->gx_gdsc);
 	}
 
+	init_completion(&gmu->gdsc_gate);
+	complete_all(&gmu->gdsc_gate);
+
 	gmu->gdsc_nb.notifier_call = gmu_cx_gdsc_event;
 	ret = devm_regulator_register_notifier(gmu->cx_gdsc, &gmu->gdsc_nb);
 
@@ -2034,9 +2043,6 @@ static int gen7_gmu_regulators_probe(struct gen7_gmu_device *gmu,
 		dev_err(&pdev->dev, "Failed to register gmu cx gdsc notifier: %d\n", ret);
 		return ret;
 	}
-
-	init_completion(&gmu->gdsc_gate);
-	complete_all(&gmu->gdsc_gate);
 
 	return 0;
 }
@@ -2188,7 +2194,7 @@ int gen7_gmu_probe(struct kgsl_device *device,
 	gmu->log_group_mask = 0x3;
 
 	/* GMU sysfs nodes setup */
-	kobject_init_and_add(&gmu->log_kobj, &log_kobj_type, &dev->kobj, "log");
+	(void) kobject_init_and_add(&gmu->log_kobj, &log_kobj_type, &dev->kobj, "log");
 
 	of_property_read_u32(gmu->pdev->dev.of_node, "qcom,gmu-perf-ddr-bw",
 		&gmu->perf_ddr_bw);
@@ -2368,6 +2374,14 @@ static int gen7_gpu_boot(struct adreno_device *adreno_dev)
 		goto oob_clear;
 	}
 
+	/*
+	 * At this point it is safe to assume that we recovered. Setting
+	 * this field allows us to take a new snapshot for the next failure
+	 * if we are prioritizing the first unrecoverable snapshot.
+	 */
+	if (device->snapshot)
+		device->snapshot->recovered = true;
+
 	/* Start the dispatcher */
 	adreno_dispatcher_start(device);
 
@@ -2473,6 +2487,17 @@ static int gen7_first_boot(struct adreno_device *adreno_dev)
 
 	set_bit(GMU_PRIV_FIRST_BOOT_DONE, &gmu->flags);
 	set_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);
+
+	/*
+	 * BCL needs respective Central Broadcast register to
+	 * be programed from TZ. This programing happens only
+	 * when zap shader firmware load is successful. Zap firmware
+	 * load can fail in boot up path hence enable BCL only after we
+	 * successfully complete first boot to ensure that Central
+	 * Broadcast register was programed before enabling BCL.
+	 */
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_BCL))
+		adreno_dev->bcl_enabled = true;
 
 	/*
 	 * There is a possible deadlock scenario during kgsl firmware reading

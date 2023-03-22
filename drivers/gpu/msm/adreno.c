@@ -16,6 +16,7 @@
 #include <linux/msm_kgsl.h>
 #include <linux/regulator/consumer.h>
 #include <linux/nvmem-consumer.h>
+#include <linux/reset.h>
 #include <linux/soc/qcom/llcc-qcom.h>
 #include <linux/trace.h>
 #include <soc/qcom/dcvs.h>
@@ -28,6 +29,7 @@
 #include "adreno_pm4types.h"
 #include "adreno_trace.h"
 #include "kgsl_bus.h"
+#include "kgsl_reclaim.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
 
@@ -407,6 +409,23 @@ static irqreturn_t adreno_irq_handler(int irq, void *data)
 	smp_mb__after_atomic();
 
 	return ret;
+}
+
+static irqreturn_t adreno_freq_limiter_irq_handler(int irq, void *data)
+{
+	struct kgsl_device *device = data;
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+
+	dev_err_ratelimited(device->dev,
+		"Max GPU freq supported:%u, but requested freq:%u from prev freq:%u\n",
+		device->speed_bin ? (device->speed_bin - 2) * 4800000 :
+		pwr->pwrlevels[0].gpu_freq,
+		pwr->pwrlevels[pwr->active_pwrlevel].gpu_freq,
+		pwr->pwrlevels[pwr->previous_pwrlevel].gpu_freq);
+
+	reset_control_assert(device->freq_limiter_irq_clear);
+
+	return IRQ_HANDLED;
 }
 
 irqreturn_t adreno_irq_callbacks(struct adreno_device *adreno_dev,
@@ -1151,6 +1170,17 @@ static void adreno_setup_device(struct adreno_device *adreno_dev)
 
 		INIT_LIST_HEAD(&rb->events.group);
 	}
+
+	/*
+	 * Some GPUs needs specific alignment for UCHE GMEM base address.
+	 * Configure UCHE GMEM base based on GMEM size and align it accordingly.
+	 * This needs to be done based on GMEM size to avoid overlap between
+	 * RB and UCHE GMEM range.
+	 */
+	if (adreno_dev->gpucore->uche_gmem_alignment)
+		adreno_dev->uche_gmem_base =
+			ALIGN(adreno_dev->gpucore->gmem_size,
+				adreno_dev->gpucore->uche_gmem_alignment);
 }
 
 static const struct of_device_id adreno_gmu_match[] = {
@@ -1249,6 +1279,12 @@ int adreno_device_probe(struct platform_device *pdev,
 		goto err;
 
 	device->pwrctrl.interrupt_num = status;
+
+	device->freq_limiter_intr_num = kgsl_request_irq(pdev, "freq_limiter_irq",
+				adreno_freq_limiter_irq_handler, device);
+
+	device->freq_limiter_irq_clear =
+		devm_reset_control_get(&pdev->dev, "freq_limiter_irq_clear");
 
 	status = kgsl_device_platform_probe(device);
 	if (status)
@@ -1449,6 +1485,7 @@ static int adreno_pm_resume(struct device *dev)
 	ops->pm_resume(adreno_dev);
 	mutex_unlock(&device->mutex);
 
+	kgsl_reclaim_start();
 	return 0;
 }
 
@@ -1473,6 +1510,13 @@ static int adreno_pm_suspend(struct device *dev)
 	mutex_lock(&device->mutex);
 	status = ops->pm_suspend(adreno_dev);
 	mutex_unlock(&device->mutex);
+
+	if (status)
+		return status;
+
+	kgsl_reclaim_close();
+	kthread_flush_worker(&kgsl_driver.RT_worker);
+	flush_workqueue(kgsl_driver.mem_workqueue);
 
 	return status;
 }
@@ -1994,7 +2038,7 @@ static int adreno_prop_device_info(struct kgsl_device *device,
 		.device_id = device->id + 1,
 		.chip_id = adreno_dev->chipid,
 		.mmu_enabled = kgsl_mmu_has_feature(device, KGSL_MMU_PAGED),
-		.gmem_gpubaseaddr = adreno_dev->gpucore->gmem_base,
+		.gmem_gpubaseaddr = 0,
 		.gmem_sizebytes = adreno_dev->gpucore->gmem_size,
 	};
 
@@ -2072,9 +2116,9 @@ static int adreno_prop_uche_gmem_addr(struct kgsl_device *device,
 		struct kgsl_device_getproperty *param)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
-	u64 vaddr = adreno_dev->gpucore->gmem_base;
 
-	return copy_prop(param, &vaddr, sizeof(vaddr));
+	return copy_prop(param, &adreno_dev->uche_gmem_base,
+		sizeof(adreno_dev->uche_gmem_base));
 }
 
 static int adreno_prop_ucode_version(struct kgsl_device *device,

@@ -53,6 +53,7 @@ static u32 a6xx_pwrup_reglist[] = {
 	A6XX_PC_DBG_ECO_CNTL,
 	A6XX_RB_CONTEXT_SWITCH_GMEM_SAVE_RESTORE,
 	A6XX_UCHE_GBIF_GX_CONFIG,
+	A6XX_UCHE_CLIENT_PF,
 };
 
 /* IFPC only static powerup restore list */
@@ -559,7 +560,6 @@ void a6xx_start(struct adreno_device *adreno_dev)
 	unsigned int uavflagprd_inv;
 	unsigned int amsbc = 0;
 	unsigned int rgb565_predicator = 0;
-	static bool patch_reglist;
 
 	/* Enable 64 bit addressing */
 	kgsl_regwrite(device, A6XX_CP_ADDR_MODE_CNTL, 0x1);
@@ -597,16 +597,16 @@ void a6xx_start(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, A6XX_UCHE_WRITE_THRU_BASE_HI, 0x0001ffff);
 
 	/*
-	 * Some A6xx targets no longer use a programmed GMEM base address
-	 * so only write the registers if a non zero address is given
-	 * in the GPU list
+	 * Some A6xx targets no longer use a programmed UCHE GMEM base
+	 * address, so only write the registers if this address is
+	 * non-zero.
 	 */
-	if (adreno_dev->gpucore->gmem_base) {
+	if (adreno_dev->uche_gmem_base) {
 		kgsl_regwrite(device, A6XX_UCHE_GMEM_RANGE_MIN_LO,
-				adreno_dev->gpucore->gmem_base);
+				adreno_dev->uche_gmem_base);
 		kgsl_regwrite(device, A6XX_UCHE_GMEM_RANGE_MIN_HI, 0x0);
 		kgsl_regwrite(device, A6XX_UCHE_GMEM_RANGE_MAX_LO,
-				adreno_dev->gpucore->gmem_base +
+				adreno_dev->uche_gmem_base +
 				adreno_dev->gpucore->gmem_size - 1);
 		kgsl_regwrite(device, A6XX_UCHE_GMEM_RANGE_MAX_HI, 0x0);
 	}
@@ -713,7 +713,8 @@ void a6xx_start(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, A6XX_RBBM_INTERFACE_HANG_INT_CNTL,
 				(1 << 30) | a6xx_core->hang_detect_cycles);
 
-	kgsl_regwrite(device, A6XX_UCHE_CLIENT_PF, 1);
+	kgsl_regwrite(device, A6XX_UCHE_CLIENT_PF, BIT(7) |
+			FIELD_PREP(GENMASK(3, 0), adreno_dev->uche_client_pf));
 
 	/* Set weights for bicubic filtering */
 	if (adreno_is_a650_family(adreno_dev)) {
@@ -765,11 +766,6 @@ void a6xx_start(struct adreno_device *adreno_dev)
 
 	a6xx_llc_enable_overrides(adreno_dev);
 
-	if (adreno_is_a662(adreno_dev))
-		kgsl_regrmw(device, A6XX_GBIF_CX_CONFIG, 0x3c0,
-			FIELD_PREP(GENMASK(7, 6), 0x1) |
-			FIELD_PREP(GENMASK(9, 8), 0x1));
-
 	if (adreno_is_a660(adreno_dev)) {
 		kgsl_regwrite(device, A6XX_CP_CHICKEN_DBG, 0x1);
 		kgsl_regwrite(device, A6XX_RBBM_GBIF_CLIENT_QOS_CNTL, 0x0);
@@ -795,9 +791,10 @@ void a6xx_start(struct adreno_device *adreno_dev)
 	 * miss any register programming when we patch the power up register
 	 * list.
 	 */
-	if (!patch_reglist && (adreno_dev->pwrup_reglist->gpuaddr != 0)) {
+	if (!adreno_dev->patch_reglist &&
+		(adreno_dev->pwrup_reglist->gpuaddr != 0)) {
 		a6xx_patch_pwrup_reglist(adreno_dev);
-		patch_reglist = true;
+		adreno_dev->patch_reglist = true;
 	}
 
 	/*
@@ -2307,6 +2304,7 @@ int a6xx_probe_common(struct platform_device *pdev,
 	adreno_reg_offset_init(gpudev->reg_offsets);
 
 	adreno_dev->hwcg_enabled = true;
+	adreno_dev->uche_client_pf = 1;
 
 	adreno_dev->preempt.preempt_level = 1;
 	adreno_dev->preempt.skipsaverestore = true;

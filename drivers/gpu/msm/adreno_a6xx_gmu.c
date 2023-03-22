@@ -497,6 +497,7 @@ int a6xx_gmu_enable_gdsc(struct adreno_device *adreno_dev)
 		dev_err(&gmu->pdev->dev,
 			"Failed to enable GMU CX gdsc, error %d\n", ret);
 
+	clear_bit(GMU_PRIV_CX_GDSC_WAIT, &gmu->flags);
 	return ret;
 }
 
@@ -505,6 +506,7 @@ void a6xx_gmu_disable_gdsc(struct adreno_device *adreno_dev)
 	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
 
 	reinit_completion(&gmu->gdsc_gate);
+	set_bit(GMU_PRIV_CX_GDSC_WAIT, &gmu->flags);
 	regulator_disable(gmu->cx_gdsc);
 }
 
@@ -1641,9 +1643,9 @@ int a6xx_gmu_parse_fw(struct adreno_device *adreno_dev)
 	}
 
 	/*
-	 * Zero payload fw blocks contain meta data and are
+	 * Zero payload fw blocks contain metadata and are
 	 * guaranteed to precede fw load data. Parse the
-	 * meta data blocks.
+	 * metadata blocks.
 	 */
 	while (offset < gmu->fw_image->size) {
 		blk = (struct gmu_block_header *)&gmu->fw_image->data[offset];
@@ -2315,9 +2317,6 @@ static int a6xx_gmu_first_boot(struct adreno_device *adreno_dev)
 
 	device->gmu_fault = false;
 
-	if (ADRENO_FEATURE(adreno_dev, ADRENO_BCL))
-		adreno_dev->bcl_enabled = true;
-
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_AWARE);
 
 	return 0;
@@ -2679,7 +2678,8 @@ static int gmu_cx_gdsc_event(struct notifier_block *nb,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	u32 val, offset;
 
-	if (!(event & REGULATOR_EVENT_DISABLE))
+	if (!(event & REGULATOR_EVENT_DISABLE) ||
+		!test_bit(GMU_PRIV_CX_GDSC_WAIT, &gmu->flags))
 		return 0;
 
 	offset = (adreno_is_a662(ADRENO_DEVICE(device)) ||
@@ -2690,6 +2690,7 @@ static int gmu_cx_gdsc_event(struct notifier_block *nb,
 		!(val & BIT(31)), 100, 100 * 1000))
 		dev_err(device->dev, "GPU CX wait timeout.\n");
 
+	clear_bit(GMU_PRIV_CX_GDSC_WAIT, &gmu->flags);
 	complete_all(&gmu->gdsc_gate);
 
 	return 0;
@@ -2879,7 +2880,7 @@ int a6xx_gmu_probe(struct kgsl_device *device,
 	gmu->log_group_mask = 0x3;
 
 	/* GMU sysfs nodes setup */
-	kobject_init_and_add(&gmu->log_kobj, &log_kobj_type, &dev->kobj, "log");
+	(void) kobject_init_and_add(&gmu->log_kobj, &log_kobj_type, &dev->kobj, "log");
 
 	of_property_read_u32(gmu->pdev->dev.of_node, "qcom,gmu-perf-ddr-bw",
 		&gmu->perf_ddr_bw);
@@ -3062,6 +3063,14 @@ static int a6xx_gpu_boot(struct adreno_device *adreno_dev)
 		goto oob_clear;
 	}
 
+	/*
+	 * At this point it is safe to assume that we recovered. Setting
+	 * this field allows us to take a new snapshot for the next failure
+	 * if we are prioritizing the first unrecoverable snapshot.
+	 */
+	if (device->snapshot)
+		device->snapshot->recovered = true;
+
 	/* Start the dispatcher */
 	adreno_dispatcher_start(device);
 
@@ -3174,6 +3183,17 @@ static int a6xx_first_boot(struct adreno_device *adreno_dev)
 
 	set_bit(GMU_PRIV_FIRST_BOOT_DONE, &gmu->flags);
 	set_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);
+
+	/*
+	 * BCL needs respective Central Broadcast register to
+	 * be programed from TZ. This programing happens only
+	 * when zap shader firmware load is successful. Zap firmware
+	 * load can fail in boot up path hence enable BCL only after we
+	 * successfully complete first boot to ensure that Central
+	 * Broadcast register was programed before enabling BCL.
+	 */
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_BCL))
+		adreno_dev->bcl_enabled = true;
 
 	/*
 	 * There is a possible deadlock scenario during kgsl firmware reading
