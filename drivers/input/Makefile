@@ -34,7 +34,6 @@ obj-$(CONFIG_OPLUS_FINGERPRINT) += oplus_fp_driver/
 
 
 #ifdef OPLUS_FEATURE_UFF_FINGERPRINT
-#zhouqijia@BSP.Biometrics.Fingerprint, 2022/07/14, add for fingerprint driver
 obj-$(CONFIG_UFF_FINGERPRINT)  += uff_fp_drivers/
 #endif /*OPLUS_FEATURE_UFF_FINGERPRINT*/
 

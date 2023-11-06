@@ -330,7 +330,6 @@ static int fsa4480_usbc_analog_setup_switches(struct fsa4480_priv *fsa_priv)
 		#ifdef OPLUS_ARCH_EXTENDS
 		/*add DIO4480 support*/
 		if(fsa_priv->vendor != DIO4480) {
-			/*Jianfeng.Qiu@PSW.MM.AudioDriver.HeadsetDet, 2019/09/20, Add for open auto mic DET*/
 			usleep_range(1000, 1005);
 			regmap_write(fsa_priv->regmap, FSA4480_FUN_EN, 0x45);
 			usleep_range(4000, 4005);

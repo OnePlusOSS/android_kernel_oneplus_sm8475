@@ -205,7 +205,6 @@ source "drivers/input/oplus_fp_driver/Kconfig"
 
 
 #ifdef OPLUS_FEATURE_UFF_FINGERPRINT
-#zhouqijia@BSP.Biometrics.Fingerprint, 2022/07/14, add for uff fingerprint driver
 source "drivers/input/uff_fp_drivers/Kconfig"
 #endif /* OPLUS_FEATURE_UFF_FINGERPRINT */
 

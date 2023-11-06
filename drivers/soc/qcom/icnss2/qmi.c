@@ -32,7 +32,6 @@
 #include "debug.h"
 #include "genl.h"
 #ifdef OPLUS_FEATURE_WIFI_BDF
-//Laixin@CONNECTIVITY.WIFI.HARDWARE.BDF.1065227 , 2019/10/17
 //Modify for: multi projects using different bdf
 #include <linux/fs.h>
 #include <asm/uaccess.h>
@@ -885,7 +884,6 @@ int icnss_wlfw_wlan_mac_req_send_sync(struct icnss_priv *priv,
 	struct qmi_txn txn;
 	int ret;
 #ifdef OPLUS_FEATURE_WIFI_BDF
-    //WuGuotian@CONNECTIVITY.WIFI.HARDWARE.BDF.1065227 , 2020/11/03, revert for factory write mac address order: write from mac_address[5] to mac_address[0],so mac address[5] is first
     int i;
     char revert_mac[QMI_WLFW_MAC_ADDR_SIZE_V01];
 #endif /* OPLUS_FEATURE_WIFI_BDF */
@@ -905,7 +903,6 @@ int icnss_wlfw_wlan_mac_req_send_sync(struct icnss_priv *priv,
 	icnss_pr_dbg("Sending WLAN mac req [%pM], state: 0x%lx\n",
 			     mac, priv->state);
 #ifdef OPLUS_FEATURE_WIFI_BDF
-    //WuGuotian@CONNECTIVITY.WIFI.HARDWARE.BDF.1065227 , 2020/11/03, revert for factory write mac address order: write from mac_address[5] to mac_address[0],so mac address[5] is first
     for (i = 0; i < QMI_WLFW_MAC_ADDR_SIZE_V01 ; i ++){
         revert_mac[i] = mac[QMI_WLFW_MAC_ADDR_SIZE_V01 - i -1];
     }
@@ -1139,7 +1136,6 @@ int icnss_wlfw_bdf_dnld_send_sync(struct icnss_priv *priv, u32 bdf_type)
 
 
 #ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
-    //wuguotian@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804, 2020/02/24
     //Add for: check fw status for switch issue
     if (bdf_type == ICNSS_BDF_REGDB) {
         set_bit(CNSS_LOAD_REGDB_SUCCESS, &priv->loadRegdbState);
@@ -1221,7 +1217,6 @@ err_send:
 	release_firmware(fw_entry);
 err_req_fw:
 #ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
-    //wuguotian@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804, 2020/02/24
     //Add for: check fw status for switch issue
     if (bdf_type == ICNSS_BDF_REGDB) {
         set_bit(CNSS_LOAD_REGDB_FAIL, &priv->loadRegdbState);

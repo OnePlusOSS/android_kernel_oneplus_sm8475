@@ -503,7 +503,6 @@ struct icnss_priv {
 	bool pon_in_progress;
 	struct timer_list recovery_timer;
 #ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
-//wuguotian@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804, 2020/02/24
 //Add for: check fw status for switch issue
 	unsigned long loadBdfState;
 	unsigned long loadRegdbState;
@@ -513,7 +512,6 @@ struct icnss_priv {
 };
 
 #ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
-//wuguotian@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804, 2020/02/24
 //Add for: check fw status for switch issue
 enum cnss_load_state {
 	CNSS_LOAD_BDF_FAIL = 1,

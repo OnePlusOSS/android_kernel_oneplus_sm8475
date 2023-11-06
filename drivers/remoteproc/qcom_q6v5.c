@@ -37,7 +37,6 @@
 #endif
 
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_FEEDBACK)
-/* tangjh@PSW.BSP.SENSOR ,2020/07/27 add for slpi/cdsp crash reason */
 #include <soc/oplus/system/kernel_fb.h>
 #define REMOTEPROC_SLPI "remoteproc-slpi"
 #define REMOTEPROC_CDSP "remoteproc-cdsp"
@@ -338,7 +337,6 @@ static irqreturn_t q6v5_wdog_interrupt(int irq, void *data)
 	}
 	#endif
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_FEEDBACK)
-	/* tangjh@PSW.BSP.SENSOR ,2020/07/27 add for slpi/cdsp crash reason */
 	if (strstr(name, REMOTEPROC_SLPI) || strstr(name, REMOTEPROC_CDSP)) {
 		if (!IS_ERR(msg) && len > 0 && msg[0]) {
 			strcat(reason, "$$module@@");
@@ -432,7 +430,6 @@ static irqreturn_t q6v5_fatal_interrupt(int irq, void *data)
 #endif
 
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_FEEDBACK)
-	/* tangjh@PSW.BSP.SENSOR ,2020/07/27 add for slpi/cdsp crash reason */
 	if (strstr(name, REMOTEPROC_SLPI) || strstr(name, REMOTEPROC_CDSP)) {
 		if (!IS_ERR(msg) && len > 0 && msg[0]) {
 			strcat(reason, "$$module@@");

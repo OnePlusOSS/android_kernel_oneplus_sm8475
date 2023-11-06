@@ -87,7 +87,6 @@ source "kernel/oplus_cpu/oplus_overload/Kconfig"
 #endif /* OPLUS_FEATURE_ABNORMAL_FLAG */
 
 #ifdef OPLUS_FEATURE_MODEM_MINIDUMP
-#xiaoyu.wu@NETWORK.ARCH.3830854, 2022/07/14, add for mdmrst
 source "drivers/soc/oplus/mdmrst/Kconfig"
 #endif /*OPLUS_FEATURE_MODEM_MINIDUMP*/
 endmenu

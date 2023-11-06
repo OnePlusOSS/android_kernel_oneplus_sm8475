@@ -46,7 +46,6 @@ obj-y                       += oplus/sensor/
 endif
 
 #ifdef CONFIG_OPLUS_SENSOR_CONSUMER_IR
-#pei.lu@BSP.SENSOR, 2022/07/29, Add for consumer ir
 obj-$(CONFIG_OPLUS_SENSOR_CONSUMER_IR_CORE) += oplus/oplus_consumer_ir/
 #endif /* CONFIG_OPLUS_SENSOR_CONSUMER_IR */
 
@@ -75,6 +74,5 @@ obj-$(CONFIG_OPLUS_FEATURE_MDMFEATURE)     += oplus/mdmfeature/
 endif
 
 #ifdef OPLUS_FEATURE_MODEM_MINIDUMP
-#xiaoyu.wu@NETWORK.ARCH.3830854, 2022/07/14, add for mdmrst
 obj-$(CONFIG_OPLUS_FEATURE_RECORD_MDMRST)     += oplus/mdmrst/
 #endif /*OPLUS_FEATURE_MODEM_MINIDUMP*/

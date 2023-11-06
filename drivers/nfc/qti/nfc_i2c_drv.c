@@ -329,7 +329,6 @@ int nfc_i2c_dev_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	pr_debug("%s: enter\n", __func__);
         //#ifdef OPLUS_FEATURE_CONNFCSOFT
-        //#Zhangnan@Connectivity.NFC.BASIC.8126, 2019/09/09, Modify for : RTCID:2896930 CON_NFC_SOFT
         //CHECK_NFC_CHIP(SN100T);
         //#endif /* OPLUS_FEATURE_CONNFCSOFT */
         //retrieve details of gpios from dt
