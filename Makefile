@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 VERSION = 5
 PATCHLEVEL = 10
-SUBLEVEL = 136
+SUBLEVEL = 149
 EXTRAVERSION =
 NAME = Dare mighty things
 
@@ -525,6 +525,63 @@ KBUILD_CFLAGS_MODULE  := -DMODULE
 KBUILD_LDFLAGS_MODULE :=
 KBUILD_LDFLAGS :=
 CLANG_FLAGS :=
+
+# ifdef OPLUS_BUG_STABILITY
+KBUILD_CFLAGS +=   -DOPLUS_BUG_STABILITY
+KBUILD_CPPFLAGS += -DOPLUS_BUG_STABILITY
+CFLAGS_KERNEL +=   -DOPLUS_BUG_STABILITY
+CFLAGS_MODULE +=   -DOPLUS_BUG_STABILITY
+# endif
+
+$(warning MSM_ARCH: -$(MSM_ARCH)-)
+ifneq ("$(MSM_ARCH)X", "waipio_tuivmX")
+# ifdef OPLUS_FEATURE_CHG_BASIC
+KBUILD_CFLAGS +=   -DOPLUS_FEATURE_CHG_BASIC
+KBUILD_CPPFLAGS += -DOPLUS_FEATURE_CHG_BASIC
+CFLAGS_KERNEL +=   -DOPLUS_FEATURE_CHG_BASIC
+CFLAGS_MODULE +=   -DOPLUS_FEATURE_CHG_BASIC
+# endif
+endif
+
+# ifdef OPLUS_FEATURE_DISPLAY
+# add OPLUS_FEATURE_DISPLAY
+KBUILD_CFLAGS +=   -DOPLUS_FEATURE_DISPLAY
+KBUILD_CPPFLAGS += -DOPLUS_FEATURE_DISPLAY
+CFLAGS_KERNEL +=   -DOPLUS_FEATURE_DISPLAY
+CFLAGS_MODULE +=   -DOPLUS_FEATURE_DISPLAY
+# endif
+
+# ifdef OPLUS_FEATURE_CAMERA_COMMON
+KBUILD_CFLAGS +=   -DOPLUS_FEATURE_CAMERA_COMMON
+KBUILD_CPPFLAGS += -DOPLUS_FEATURE_CAMERA_COMMON
+CFLAGS_KERNEL +=   -DOPLUS_FEATURE_CAMERA_COMMON
+CFLAGS_MODULE +=   -DOPLUS_FEATURE_CAMERA_COMMON
+# endif
+
+#ifdef OPLUS_FEATURE_WIFI_BDF
+KBUILD_CFLAGS +=   -DOPLUS_FEATURE_WIFI_BDF
+KBUILD_CPPFLAGS += -DOPLUS_FEATURE_WIFI_BDF
+CFLAGS_KERNEL +=   -DOPLUS_FEATURE_WIFI_BDF
+CFLAGS_MODULE +=   -DOPLUS_FEATURE_WIFI_BDF
+
+KBUILD_CFLAGS +=   -DOPLUS_FEATURE_WIFI_MAC
+KBUILD_CPPFLAGS += -DOPLUS_FEATURE_WIFI_MAC
+CFLAGS_KERNEL +=   -DOPLUS_FEATURE_WIFI_MAC
+CFLAGS_MODULE +=   -DOPLUS_FEATURE_WIFI_MAC
+
+KBUILD_CFLAGS +=   -DOPLUS_FEATURE_WIFI_WSA
+KBUILD_CPPFLAGS += -DOPLUS_FEATURE_WIFI_WSA
+CFLAGS_KERNEL +=   -DOPLUS_FEATURE_WIFI_WSA
+CFLAGS_MODULE +=   -DOPLUS_FEATURE_WIFI_WSA
+#endif /* OPLUS_FEATURE_WIFI_BDF */
+
+#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+#Huitao@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804 , add for wifi fw monitor
+KBUILD_CFLAGS +=   -DOPLUS_FEATURE_WIFI_DCS_SWITCH
+KBUILD_CPPFLAGS += -DOPLUS_FEATURE_WIFI_DCS_SWITCH
+CFLAGS_KERNEL +=   -DOPLUS_FEATURE_WIFI_DCS_SWITCH
+CFLAGS_MODULE +=   -DOPLUS_FEATURE_WIFI_DCS_SWITCH
+# endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
 
 CC := scripts/basic/cc-wrapper $(CC)
 
@@ -1051,6 +1108,9 @@ KBUILD_CFLAGS   += $(KCFLAGS)
 KBUILD_LDFLAGS_MODULE += --build-id=sha1
 LDFLAGS_vmlinux += --build-id=sha1
 
+KBUILD_LDFLAGS	+= -z noexecstack
+KBUILD_LDFLAGS	+= $(call ld-option,--no-warn-rwx-segments)
+
 ifeq ($(CONFIG_STRIP_ASM_SYMS),y)
 LDFLAGS_vmlinux	+= $(call ld-option, -X,)
 endif
@@ -1285,7 +1345,7 @@ dt_binding_check: scripts_dtc
 
 
 ifeq ($(KBUILD_EXTMOD),)
-core-y		+= kernel/ certs/ mm/ fs/ ipc/ security/ crypto/ block/
+core-y		+= kernel/ certs/ mm/ fs/ ipc/ security/ crypto/ block/ io_uring/
 
 vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, \
 		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
@@ -1295,12 +1355,10 @@ vmlinux-alldirs	:= $(sort $(vmlinux-dirs) Documentation \
 		     $(patsubst %/,%,$(filter %/, $(core-) \
 			$(drivers-) $(libs-))))
 
-subdir-modorder := $(addsuffix modules.order,$(filter %/, \
-			$(core-y) $(core-m) $(libs-y) $(libs-m) \
-			$(drivers-y) $(drivers-m)))
-
 build-dirs	:= $(vmlinux-dirs)
 clean-dirs	:= $(vmlinux-alldirs)
+
+subdir-modorder := $(addsuffix /modules.order, $(build-dirs))
 
 # Externally visible symbols (used by link-vmlinux.sh)
 KBUILD_VMLINUX_OBJS := $(head-y) $(patsubst %/,%/built-in.a, $(core-y))
@@ -1432,11 +1490,15 @@ endif
 # needs to be updated, so this check is forced on all builds
 
 uts_len := 64
-ifneq (,$(BUILD_NUMBER))
-	UTS_RELEASE=$(KERNELRELEASE)-ab$(BUILD_NUMBER)
-else
+
+#ifdef OPLUS_FEATURE_BUILD
+#ifneq (,$(BUILD_NUMBER))
+#	UTS_RELEASE=$(KERNELRELEASE)-ab$(BUILD_NUMBER)
+#else
 	UTS_RELEASE=$(KERNELRELEASE)
-endif
+#endif
+#endif OPLUS_FEATURE_BUILD
+
 define filechk_utsrelease.h
 	if [ `echo -n "$(UTS_RELEASE)" | wc -c ` -gt $(uts_len) ]; then \
 		echo '"$(UTS_RELEASE)" exceeds $(uts_len) characters' >&2;    \

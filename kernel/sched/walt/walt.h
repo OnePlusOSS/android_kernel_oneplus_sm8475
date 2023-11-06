@@ -216,6 +216,11 @@ extern __read_mostly unsigned int sysctl_sched_force_lb_enable;
 extern const int sched_user_hint_max;
 extern unsigned int sysctl_sched_dynamic_tp_enable;
 extern unsigned int sysctl_panic_on_walt_bug;
+
+#ifdef CONFIG_OPLUS_FEATURE_SUGOV_TL
+extern unsigned int get_targetload(struct cpufreq_policy *policy);
+#endif /* CONFIG_OPLUS_FEATURE_SUGOV_TL */
+
 extern int sched_dynamic_tp_handler(struct ctl_table *table, int write,
 			void __user *buffer, size_t *lenp, loff_t *ppos);
 
@@ -247,7 +252,7 @@ static inline unsigned int sched_cpu_legacy_freq(int cpu)
 extern __read_mostly bool sched_freq_aggr_en;
 static inline void walt_enable_frequency_aggregation(bool enable)
 {
-	sched_freq_aggr_en = enable;
+/* disable frequency_aggregation since we have already enable frameboost */
 }
 
 #ifndef CONFIG_IRQ_TIME_ACCOUNTING

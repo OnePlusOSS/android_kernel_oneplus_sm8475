@@ -53,6 +53,11 @@
 #include "debug.h"
 #include "power.h"
 #include "genl.h"
+#ifdef OPLUS_FEATURE_WIFI_MAC
+//WuGuotian@CONNECTIVITY.WIFI.HARDWARE.MAC.1068489, 2021/02/08,Add for boot wlan mode not use NV mac
+#include <soc/oplus/system/boot_mode.h>
+#include <soc/oplus/system/oplus_project.h>
+#endif /* OPLUS_FEATURE_WIFI_MAC */
 
 #define MAX_PROP_SIZE			32
 #define NUM_LOG_PAGES			10
@@ -127,6 +132,12 @@ static const char * const icnss_pdr_cause[] = {
 	[ICNSS_ROOT_PD_SHUTDOWN] = "Root PD shutdown",
 	[ICNSS_HOST_ERROR] = "Host error",
 };
+
+#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+//wuguotian@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804 , 2020/02/24
+//Add for: check fw status for switch issue
+static unsigned int cnssprobestate = 0;
+#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
 
 static void icnss_set_plat_priv(struct icnss_priv *priv)
 {
@@ -738,7 +749,12 @@ static int icnss_setup_dms_mac(struct icnss_priv *priv)
 	/* DTSI property use-nv-mac is used to force DMS MAC address for WLAN.
 	 * Thus assert on failure to get MAC from DMS even after retries
 	 */
-	if (priv->use_nv_mac) {
+#ifndef OPLUS_FEATURE_WIFI_MAC
+    //WuGuotian@CONNECTIVITY.WIFI.HARDWARE.MAC.1068489, 2021/02/08,Add for boot wlan mode not use NV mac
+    if (priv->use_nv_mac) {
+#else
+    if ((get_boot_mode() !=  MSM_BOOT_MODE__WLAN) && priv->use_nv_mac) {
+#endif /* OPLUS_FEATURE_WIFI_MAC */
 		for (i = 0; i < ICNSS_DMS_QMI_CONNECTION_WAIT_RETRY; i++) {
 			if (priv->dms.mac_valid)
 				break;
@@ -4243,6 +4259,14 @@ void icnss_add_fw_prefix_name(struct icnss_priv *priv, char *prefix_name,
 		scnprintf(prefix_name, ICNSS_MAX_FILE_NAME,
 			  QCA6750_PATH_PREFIX "%s", name);
 
+#ifdef OPLUS_FEATURE_WIFI_BDF
+    //XiaSong@CONNECTIVITY.WIFI.HARDWARE.BDF.1065227 , 2021/08/27, add for qca6750 bdf/regdb
+    scnprintf(prefix_name, ICNSS_MAX_FILE_NAME, "%s", name);
+#else
+    scnprintf(prefix_name, ICNSS_MAX_FILE_NAME,
+          QCA6750_PATH_PREFIX "%s", name);
+#endif /* OPLUS_FEATURE_WIFI_BDF */
+
 	icnss_pr_dbg("File added with prefix: %s\n", prefix_name);
 }
 
@@ -4309,6 +4333,42 @@ static inline void icnss_runtime_pm_deinit(struct icnss_priv *priv)
 	pm_runtime_allow(&priv->pdev->dev);
 	pm_runtime_put_sync(&priv->pdev->dev);
 }
+
+#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+//HuiTAO@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804 , 2020/02/24
+//Add for: check fw status for switch issue
+static void icnss_create_fw_state_kobj(void);
+static ssize_t icnss_show_fw_ready(struct device_driver *driver, char *buf)
+{
+	bool firmware_ready = false;
+	bool bdfloadsuccess = false;
+	bool regdbloadsuccess = false;
+	bool cnssprobesuccess = false;
+	if (!penv) {
+           icnss_pr_err("icnss_show_fw_ready plat_env is NULL!\n");
+	} else {
+           firmware_ready = test_bit(ICNSS_FW_READY, &penv->state);
+           regdbloadsuccess = test_bit(CNSS_LOAD_REGDB_SUCCESS, &penv->loadRegdbState);
+           bdfloadsuccess = test_bit(CNSS_LOAD_BDF_SUCCESS, &penv->loadBdfState);
+	}
+	cnssprobesuccess = (cnssprobestate == CNSS_PROBE_SUCCESS);
+	return sprintf(buf, "%s:%s:%s:%s",
+           (firmware_ready ? "fwstatus_ready" : "fwstatus_not_ready"),
+           (regdbloadsuccess ? "regdb_loadsuccess" : "regdb_loadfail"),
+           (bdfloadsuccess ? "bdf_loadsuccess" : "bdf_loadfail"),
+           (cnssprobesuccess ? "cnssprobe_success" : "cnssprobe_fail")
+           );
+}
+
+struct driver_attribute icnss_fw_ready_attr = {
+	.attr = {
+		.name = "firmware_ready",
+		.mode = S_IRUGO,
+	},
+	.show = icnss_show_fw_ready,
+	//read only so we don't need to impl store func
+};
+#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
 
 static inline bool icnss_use_nv_mac(struct icnss_priv *priv)
 {
@@ -4379,6 +4439,12 @@ static int icnss_probe(struct platform_device *pdev)
 	icnss_init_control_params(priv);
 
 	icnss_read_device_configs(priv);
+
+#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+	//HuiTAO@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804 , 2020/02/24
+	//Add for: check fw status for switch issue
+	icnss_create_fw_state_kobj();
+#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
 
 	ret = icnss_resource_parse(priv);
 	if (ret)
@@ -4479,6 +4545,7 @@ static int icnss_probe(struct platform_device *pdev)
 
 	INIT_LIST_HEAD(&priv->icnss_tcdev_list);
 
+
 	if (priv->pon_gpio_control) {
 		ret = icnss_get_pinctrl(priv);
 		if (ret < 0) {
@@ -4486,6 +4553,12 @@ static int icnss_probe(struct platform_device *pdev)
 			goto out_unregister_fw_service;
 		}
 	}
+
+#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+	//wuguotian@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804, 2020/02/24
+	//Add for: check fw status for switch issue
+	cnssprobestate = CNSS_PROBE_SUCCESS;
+#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
 
 	icnss_pr_info("Platform driver probed successfully\n");
 
@@ -4501,6 +4574,12 @@ out_free_resources:
 	icnss_put_resources(priv);
 out_reset_drvdata:
 	dev_set_drvdata(dev, NULL);
+#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+    //wuguotian@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804, 2020/02/24
+    //Add for: check fw status for switch issue
+    cnssprobestate = CNSS_PROBE_FAIL;
+#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
+
 	return ret;
 }
 
@@ -4822,6 +4901,16 @@ static struct platform_driver icnss_driver = {
 		.of_match_table = icnss_dt_match,
 	},
 };
+
+#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
+//HuiTAO@CONNECTIVITY.WIFI.HARDWARE.SWITCH.2877804, 2020/02/24
+//Add for: check fw status for switch issue
+static void icnss_create_fw_state_kobj(void) {
+	if (driver_create_file(&(icnss_driver.driver), &icnss_fw_ready_attr)) {
+		icnss_pr_info("failed to create %s", icnss_fw_ready_attr.attr.name);
+	}
+}
+#endif /* OPLUS_FEATURE_WIFI_DCS_SWITCH */
 
 static int __init icnss_initialize(void)
 {

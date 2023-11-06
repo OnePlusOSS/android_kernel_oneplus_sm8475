@@ -2314,6 +2314,32 @@ static int iommu_probe_user_context(struct kgsl_device *device,
 		"gfx3d_user", kgsl_iommu_default_fault_handler);
 	if (ret)
 		return ret;
+	/*
+	* It is problematic if smmu driver does system suspend before consumer
+	* device (gpu). So smmu driver creates a device_link to act as a
+	* supplier which in turn will ensure correct order during system
+	* suspend. In kgsl, since we don't initialize iommu on the gpu device,
+	* we should create a device_link between kgsl iommu device and gpu
+	* device to maintain a correct suspend order between smmu device and
+	* gpu device.
+	*/
+	if (!device_link_add(&device->pdev->dev, &iommu->user_context.pdev->dev,
+		DL_FLAG_AUTOREMOVE_CONSUMER))
+		dev_err(&iommu->user_context.pdev->dev, "Unable to create device link to gpu device");
+
+	/*
+	 * It is problematic if smmu driver does system suspend before consumer
+	 * device (gpu). So smmu driver creates a device_link to act as a
+	 * supplier which in turn will ensure correct order during system
+	 * suspend. In kgsl, since we don't initialize iommu on the gpu device,
+	 * we should create a device_link between kgsl iommu device and gpu
+	 * device to maintain a correct suspend order between smmu device and
+	 * gpu device.
+	 */
+	if (!device_link_add(&device->pdev->dev, &iommu->user_context.pdev->dev,
+			DL_FLAG_AUTOREMOVE_CONSUMER))
+		dev_err(&iommu->user_context.pdev->dev,
+				"Unable to create device link to gpu device\n");
 
 	/*
 	 * It is problematic if smmu driver does system suspend before consumer
